@@ -1,0 +1,8 @@
+.venv
+.git
+.lineage
+**/__pycache__
+**/*.egg-info
+.pytest_cache
+*.db*
+tests

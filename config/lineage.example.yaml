@@ -1,0 +1,23 @@
+# Copy to lineage.yaml and point LINEAGE_CONFIG at it. Any LINEAGE_* env var overrides these.
+# Keep credentials out of this file: set LINEAGE_DB_URL in the environment instead.
+
+# Where ALL Lineage state lives. Your database, nothing else:
+#   postgresql://user:password@host:5432/dbname   (needs the pgvector extension)
+#   sqlite:///~/.lineage/index.db                  (single machine)
+db_url: sqlite:///~/.lineage/index.db
+# Postgres only: the schema Lineage keeps its tables in.
+db_schema: lineage
+
+# Pinned for everyone and CI. Changing it means rebuilding the index.
+#   hash                                         zero-dependency, lexical only (default)
+#   st:sentence-transformers/all-MiniLM-L6-v2    pip install lineage[st]; or a local model folder path
+#   ollama:nomic-embed-text                      your own Ollama
+embedder: hash
+
+# Indexing only accepts repos under these directories.
+allowed_roots:
+  - ~/src
+
+max_file_bytes: 2000000
+# Parser processes; 0 = one per CPU core (max 8).
+index_workers: 0
