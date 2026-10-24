@@ -15,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from lineage.auth import Principal
 from lineage.config import Settings
-from lineage.service import Lineage
+from lineage.service import ALL_PROJECTS, Lineage
 
 T = TypeVar("T")
 
@@ -24,9 +24,11 @@ T = TypeVar("T")
 EXPECTED_ERRORS = (ValueError, PermissionError, LookupError, FileNotFoundError, NotADirectoryError, RuntimeError)
 
 INSTRUCTIONS = (
-    "Code intelligence for large multi-system codebases. Call get_project_context first for the "
-    "project's rules and dictionary, then search_code before opening files. resolve_term maps "
-    "design-document vocabulary to code; `proposed` results are unreviewed guesses."
+    "Lineage indexes every system of this organisation (backend services, BFFs, frontends, legacy), "
+    "most of which are NOT in the editor's workspace. Call get_project_context first for this "
+    "repository's rules, dictionary and the list of other systems. For anything that may live in "
+    "another system (the backend, an upstream or downstream service), use search_code then read_code "
+    "instead of workspace search, and never conclude something is unavailable without searching here."
 )
 
 
@@ -72,21 +74,38 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
 
     @mcp.tool()
     async def get_project_context(ctx: Context, project: str | None = None) -> dict:
-        """The project's approved rules and dictionary. Call this before starting a task and
-        follow the rules."""
+        """The project's approved rules and dictionary, what this system is, and the other systems
+        (whose code is only reachable through search_code/read_code). Call this before starting a
+        task and follow the rules."""
         return await run(ctx, lambda who, project: app.project_context(who, need(project)), project=project)
 
     @mcp.tool()
     async def search_code(ctx: Context, query: str, top_n: int = 8, project: str | None = None) -> list[dict]:
-        """Hybrid semantic + keyword search. Returns the top files (max 25), each with a one-line
-        meaning, matching symbols and the best-matching line range."""
-        return await run(ctx, lambda who, project: app.search_code(who, query, top_n, project), project=project)
+        """Search the code of ALL the organisation's systems: this repository AND the backend services,
+        BFFs, frontends and legacy systems that are NOT in this workspace. Use it instead of workspace
+        search whenever the answer may live in another system (e.g. "the backend", an upstream API).
+        Returns the top files (max 25), each with its system_id, a one-line meaning, matching
+        symbols and line range; then read them with read_code. `project` narrows to one system."""
+        return await run(ctx, lambda who, project: app.search_code(who, query, top_n, project),
+                         project=project or ALL_PROJECTS)
+
+    @mcp.tool()
+    async def read_code(ctx: Context, path: str, project: str | None = None, start_line: int | None = None,
+                        end_line: int | None = None) -> dict:
+        """Read source code of any system, including backend/upstream/downstream repositories that are
+        NOT in this workspace and cannot be opened with normal file tools. Pass the path and the
+        hit's system_id (as `project`) from search_code. Returns numbered lines, at most 300 per
+        call; secrets are redacted."""
+        return await run(ctx, lambda who, project: app.read_code(who, path, need(project), start_line, end_line),
+                         project=project)
 
     @mcp.tool()
     async def resolve_term(ctx: Context, term: str, project: str | None = None) -> dict:
-        """What a design (HLD/LLD) term means in this project, and which code implements it.
-        Approved entries win; otherwise inferred code links come back as `proposed`."""
-        return await run(ctx, lambda who, project: app.resolve_term(who, term, project), project=project)
+        """What a business/design term (from HLDs, CRs, the dictionary) means, and which code in which
+        system implements it, across all systems. Approved entries win; inferred code links come back
+        as `proposed`. `project` narrows to one system."""
+        return await run(ctx, lambda who, project: app.resolve_term(who, term, project),
+                         project=project or ALL_PROJECTS)
 
     @mcp.tool()
     async def suggest_term(ctx: Context, term: str, definition: str, source: str | None = None,

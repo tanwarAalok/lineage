@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from lineage.service import INSTANCE, Lineage
+from lineage.store.sql import SCHEMA_VERSION
 
 
 def test_remote_connections_require_tls_by_default():
@@ -34,9 +35,10 @@ def test_upgrade_migrates_and_keeps_team_data(env):
         store._execute("drop index jobs_one_active")
         store._execute("alter table jobs drop column heartbeat_at")
         store._execute("alter table jobs drop column owner")
+        store._execute("alter table systems drop column description")
         store._set_meta("schema_version", "3")
     with _reopen(app) as store:
-        assert store._meta("schema_version") == "4"
+        assert store._meta("schema_version") == str(SCHEMA_VERSION)
         assert store.create_job("billing", "index", "root", INSTANCE) is not None  # new columns work
     assert [r["title"] for r in app.rules(root, "billing")] == ["Money"]
     assert app.authenticate(env.tokens["bob"]).name == "bob"
@@ -73,7 +75,7 @@ def test_restart_only_interrupts_abandoned_jobs(env):
 
 def test_db_check_reports_the_database(env):
     info = env.app.db_check()
-    assert info["schema_version"] == "4" and info["rows"]["systems"] == 2
+    assert info["schema_version"] == str(SCHEMA_VERSION) and info["rows"]["systems"] == 2
     if info["database"] == "postgres":
         assert info["pgvector"] and info["round_trip_ms"] >= 0 and "password" not in info["connection"]
     else:

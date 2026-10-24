@@ -71,6 +71,7 @@ def register_web(mcp: MCPServer, app: Lineage) -> None:
     route("/api/me", "GET", lambda who, p, b: {"name": who.name, "is_admin": who.is_admin, "maintains": sorted(who.roles)})
     route("/api/projects", "GET", lambda who, p, b: app.list_projects(who))
     route("/api/projects", "POST", lambda who, p, b: app.start_index_job(who, _s(b, "repo_path"), b.get("project") or None))
+    route(P + "/description", "POST", lambda who, p, b: app.set_description(who, p["project"], b.get("description")))
     route(P + "/reindex", "POST", lambda who, p, b: app.reindex(who, p["project"]))
     route(P + "/jobs", "GET", lambda who, p, b: app.jobs(who, p["project"]))
     route(P + "/terms", "GET", lambda who, p, b: app.terms(who, p["project"]))

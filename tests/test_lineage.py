@@ -15,6 +15,36 @@ def test_search_finds_relevant_file_with_meaning(env):
     assert {h["system_id"] for h in env.app.search_code(env.root, "invoice", project="crm")} <= {"crm"}
 
 
+def test_cross_system_search_with_star(env):
+    bob = env.who("bob")
+    everywhere = {h["system_id"] for h in env.app.search_code(bob, "load customer invoice", project="*")}
+    assert everywhere == {"billing", "crm"}
+    assert env.app.resolve_term(bob, "invoice service", project="*")["mappings"]
+
+
+def test_agents_learn_about_the_other_systems(env):
+    app, root, bob = env.app, env.root, env.who("bob")
+    app.set_description(root, "crm", "backend: customer profiles")
+    with pytest.raises(PermissionError):
+        app.set_description(bob, "crm", "mine")  # developers cannot
+    ctx = app.project_context(bob, "billing")
+    assert ctx["other_systems"] == [{"project": "crm", "description": "backend: customer profiles"}]
+    assert "read_code" in ctx["other_systems_access"]
+    md = app.assets(bob, "billing")["copilot-instructions.md"]
+    assert "`crm` - backend: customer profiles" in md and "not in this workspace" in md
+    assert md.index("## Systems") < md.index("## Project rules")  # up front, where agents look first
+
+
+def test_read_code_from_another_project(env):
+    bob, app = env.who("bob"), env.app
+    code = app.read_code(bob, "billing/invoice.py", "billing", 8, 10)
+    assert code["start_line"] == 8 and "fetch_usage(account_id)" in code["code"]
+    assert "hunter2pass" not in app.read_code(bob, "billing/config.py", "billing")["code"]  # redacted
+    for path in (".env", "../crm/crm/customer.py", "billing/missing.py"):  # secret, traversal, unknown
+        with pytest.raises((LookupError, PermissionError)):
+            app.read_code(bob, path, "billing")
+
+
 def test_secrets_never_indexed(env):
     app, root = env.app, env.root
     with app.open_store() as store:
@@ -55,7 +85,8 @@ def test_call_graph_and_assets(env):
     with env.app.open_store() as store:
         hubs = {h["name"] for h in store.project_stats("billing")["hubs"]}
     assert {"fetch_usage", "apply_tax"} <= hubs
-    agents = (env.billing / ".lineage" / "AGENTS.md").read_text(encoding="utf-8")
+    assert not (env.billing / ".lineage").exists()  # never writes into repositories (copies go stale)
+    agents = env.app.assets(env.root, "billing")["AGENTS.md"]
     assert "get_project_context" in agents and "fetch_usage" in agents
 
 

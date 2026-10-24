@@ -1,15 +1,9 @@
-"""Human-readable per-project assets: instruction files carrying the project's approved rules and
-dictionary, meant to be reviewed and committed to the target repo.
-
-Rendered on demand (web UI download, `get_project_context`) and written to <repo>/.lineage/ at
-onboarding, so an existing AGENTS.md / copilot-instructions.md is never clobbered.
+"""Human-readable per-project assets: instruction files carrying the project's approved rules,
+dictionary and the map of other systems. Rendered fresh on demand (web UI download / assets API)
+for teams to commit; Lineage never writes them into repositories itself, where they would go stale.
 """
 
 from __future__ import annotations
-
-import os
-import tempfile
-from pathlib import Path
 
 import yaml
 
@@ -18,12 +12,13 @@ from lineage.store.base import Store
 TOOL_GUIDE = """\
 ## How to explore this codebase
 
-This repo is indexed by the **lineage** MCP server. Use its tools instead of grepping or
-opening files to find where things live:
+The **lineage** MCP server indexes this repository and every other system listed above. Prefer
+its tools to workspace search, and always use them for anything outside this repository:
 
-- `get_project_context()` - this project's rules and dictionary. Call it first.
-- `search_code(query)` - hybrid semantic + keyword search; returns the few relevant files with
-  a one-line meaning each.
+- `get_project_context()` - this project's rules, dictionary and the other systems. Call it first.
+- `search_code(query)` - searches ALL systems by default (pass `project` to narrow); returns the
+  few relevant files, each with its `system_id` and a one-line meaning.
+- `read_code(path, project)` - read code of any system, including ones not in this workspace.
 - `resolve_term(term)` - what a design-document (HLD/LLD) term means and which code implements it.
   `proposed` code links are unreviewed guesses.
 - `suggest_term(term, definition)` - only with the developer's explicit input; a maintainer reviews it.
@@ -39,7 +34,7 @@ def render_assets(store: Store, system_id: str) -> dict[str, str]:
 
     rule_md = "\n".join(f"- **{r['title']}** - {r['body']}" for r in rules) or "- (none yet)"
     term_md = "\n".join(f"- **{t['term']}** - {t['definition']}" for t in terms) or "- (none yet)"
-    body = (f"# {system_id}\n\n## Project rules\n\n{rule_md}\n\n## Dictionary\n\n{term_md}\n\n"
+    body = (f"# {system_id}\n\n{_systems(store, system_id)}## Project rules\n\n{rule_md}\n\n## Dictionary\n\n{term_md}\n\n"
             f"{_overview(system_id, stats)}\n{TOOL_GUIDE}")
     glossary = {
         "project": system_id,
@@ -56,15 +51,21 @@ def render_assets(store: Store, system_id: str) -> dict[str, str]:
     }
 
 
-def write_assets(root: Path, system_id: str, store: Store) -> list[str]:
-    out_dir = root / ".lineage"
-    if out_dir.is_symlink():
-        raise PermissionError(f"{out_dir} is a symlink; refusing to write through it")
-    out_dir.mkdir(exist_ok=True)
-    files = render_assets(store, system_id)
-    for name, content in files.items():
-        _atomic_write(out_dir / name, content)
-    return [str(out_dir / n) for n in files]
+def _systems(store: Store, system_id: str) -> str:
+    """Where this repo sits among the other systems. Agents need this up front: without it they
+    answer cross-system questions from this repo alone and conclude the answer is unavailable."""
+    def line(s: dict) -> str:
+        return f"- `{s['id']}`" + (f" - {s['description']}" if s["description"] else "")
+
+    systems = store.systems(None)
+    me = next((s for s in systems if s["id"] == system_id), None)
+    others = "\n".join(line(s) for s in systems if s["id"] != system_id) or "- (none)"
+    this = f"This repository is **`{system_id}`**" + (f": {me['description']}" if me and me["description"] else "")
+    return (f"## Systems\n\n{this.rstrip('.')}.\n\nOther systems, also indexed by Lineage:\n\n{others}\n\n"
+            "Their code is **not in this workspace**. For any question about another system (the backend, "
+            "an upstream or downstream service, the frontend), do not answer from this repository alone and "
+            'never conclude the answer is unavailable: call `search_code` with `project="*"`, then `read_code` '
+            "on the hit, passing the hit's `system_id` as `project`.\n\n")
 
 
 def _overview(system_id: str, stats: dict) -> str:
@@ -80,14 +81,3 @@ def _overview(system_id: str, stats: dict) -> str:
         f"### Layout\n\n{dirs}\n\n"
         f"### Most-called symbols (change with care)\n\n{hubs}\n"
     )
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-        os.replace(tmp, path)
-    except BaseException:
-        os.unlink(tmp)
-        raise

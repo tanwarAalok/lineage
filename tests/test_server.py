@@ -33,7 +33,22 @@ def test_mcp_stdio_roundtrip(tmp_path):
             assert hits[0]["path"] == "orders.py"
 
             ctx = await s.call_tool("get_project_context", {"project": "svc"})
-            assert json.loads(ctx.content[0].text) == {"project": "svc", "rules": [], "dictionary": []}
+            context = json.loads(ctx.content[0].text)
+            assert (context["project"], context["rules"], context["dictionary"]) == ("svc", [], [])
+            assert "read_code" in context["other_systems_access"]
+
+            # search_code covers every system by default: that is what workspace search cannot do
+            other = tmp_path / "repos" / "pricing"
+            other.mkdir()
+            (other / "tax.py").write_text("TAX_RATE = 0.18\ndef apply_tax(amount):\n    return amount * 1.18\n", encoding="utf-8")
+            await s.call_tool("onboard_project", {"repo_path": str(other)})
+            for _ in range(100):
+                projects = (await s.call_tool("list_projects", {})).structured_content["result"]
+                if any(p["id"] == "pricing" and p["last_job"]["status"] == "done" for p in projects):
+                    break
+                await anyio.sleep(0.05)
+            hits = (await s.call_tool("search_code", {"query": "apply tax rate"})).structured_content["result"]
+            assert hits[0]["system_id"] == "pricing"
 
             denied = await s.call_tool("onboard_project", {"repo_path": str(tmp_path)})
             assert denied.is_error and "allowed_roots" in denied.content[0].text

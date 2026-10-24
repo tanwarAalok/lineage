@@ -16,12 +16,13 @@ from functools import cached_property
 from pathlib import Path
 
 from lineage import search
-from lineage.assets import render_assets, write_assets
+from lineage.assets import render_assets
 from lineage.auth import Principal, hash_token, new_token
 from lineage.config import Settings
 from lineage.indexer import Progress, index_repo
 from lineage.ingest.embed import Embedder, make_embedder
-from lineage.security import resolve_repo_path, validate_system_id
+from lineage.ingest.parse import decode, read_indexable
+from lineage.security import is_secret_file, redact, resolve_repo_path, validate_system_id
 from lineage.store.base import Store, TermMapping, open_store
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,13 @@ MAX_TEXT_CHARS = 8000
 MAX_SOURCE_CHARS = 500
 STATUSES = ("proposed", "approved", "rejected")
 KINDS = ("term", "rule", "mapping")
+ALL_PROJECTS = "*"
+OTHER_SYSTEMS_GUIDE = (
+    "Code of the other systems is NOT in this workspace; Lineage is the only way to see it. When a "
+    "question involves another system (e.g. 'the backend', an upstream or downstream service, the "
+    "frontend), never conclude the answer is unavailable: search_code with project='*' (or that "
+    "project's id), then read_code on the hit's path with its system_id as project.")
+MAX_READ_LINES = 300
 USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$")
 HEARTBEAT_S = 60
 STALE_AFTER = timedelta(minutes=5)  # a job silent this long belongs to a server that died
@@ -91,8 +99,15 @@ class Lineage:
             jobs = {}
             for j in store.jobs(None, limit=200):
                 jobs.setdefault(j["system_id"], j)
-        return [{"id": r["id"], "files": r["files"], "indexed_at": r["indexed_at"], "role": who.role(r["id"]),
-                 "last_job": _job_summary(jobs.get(r["id"]))} for r in rows]
+        return [{"id": r["id"], "description": r["description"], "files": r["files"], "indexed_at": r["indexed_at"],
+                 "role": who.role(r["id"]), "last_job": _job_summary(jobs.get(r["id"]))} for r in rows]
+
+    def set_description(self, who: Principal, project: str, description: str | None) -> dict:
+        project = self._readable(who, project, "maintainer")
+        description = _optional(description, MAX_SOURCE_CHARS, "description")
+        with self._store(who, "set_description", {"project": project, "description": description}) as store:
+            store.set_description(project, description)
+        return {"project": project, "description": description}
 
     def index_project(self, who: Principal, repo_path: str, project: str | None = None,
                       progress: Progress | None = None) -> dict:
@@ -145,13 +160,9 @@ class Lineage:
         return root, project
 
     def _run_index(self, store: Store, root: Path, project: str, progress: Progress | None) -> dict:
-        report = index_repo(root, project, self.settings, self.embedder, store, progress)
-        try:
-            assets = {"assets": write_assets(root, project, store)}
-        except OSError as e:  # read-only checkout (CI, container mount): the index is still good
-            log.warning("could not write assets to %s: %s", root, e)
-            assets = {"assets": [], "assets_error": str(e)}
-        return {**report.to_dict(), **assets}
+        # Nothing is written into the repository: copies there go stale when rules change, and agents
+        # then read the stale copy. Fresh instruction files come from the web UI / assets API.
+        return index_repo(root, project, self.settings, self.embedder, store, progress).to_dict()
 
     def _job(self, job_id: int, root: Path, project: str) -> None:
         stop = threading.Event()
@@ -183,6 +194,8 @@ class Lineage:
         return project
 
     def _scope(self, who: Principal, project: str | None) -> list[str] | None:
+        if project == ALL_PROJECTS:  # cross-system questions: every project the caller may read
+            return who.scope()
         return [self._readable(who, project)] if project else who.scope()
 
     # --- retrieval
@@ -202,12 +215,42 @@ class Lineage:
     def project_context(self, who: Principal, project: str) -> dict:
         project = self._readable(who, project)
         with self._store(who, "project_context", {"project": project}) as store:
+            systems = store.systems(who.scope())
             return {
                 "project": project,
+                "description": next((s["description"] for s in systems if s["id"] == project), None),
                 "rules": [{"title": r["title"], "rule": r["body"]} for r in store.rules([project], "approved")],
                 "dictionary": [{"term": t["term"], "definition": t["definition"]}
                                for t in store.terms([project], status="approved")],
+                "other_systems": [{"project": s["id"], "description": s["description"]}
+                                  for s in systems if s["id"] != project],
+                "other_systems_access": OTHER_SYSTEMS_GUIDE,
             }
+
+    def read_code(self, who: Principal, path: str, project: str, start_line: int | None = None,
+                  end_line: int | None = None) -> dict:
+        """Code from any project's checkout on the server, so agents can read upstream systems that
+        are not open in their editor. Only files Lineage indexed (never ignored or secret files),
+        never outside the project root, secrets redacted, at most MAX_READ_LINES lines."""
+        project = self._readable(who, project)
+        path = _text(path, 1000, "path").replace("\\", "/").lstrip("/")
+        args = {"project": project, "path": path, "start_line": start_line, "end_line": end_line}
+        with self._store(who, "read_code", args) as store:
+            rows = store.systems([project])
+            if not rows or not store.is_indexed(project, path):
+                raise LookupError(f"{path!r} is not an indexed file of {project!r}; use a path from search_code")
+        root = Path(rows[0]["root"]).resolve()
+        file = (root / path).resolve()
+        if not file.is_relative_to(root) or is_secret_file(path):
+            raise PermissionError(f"{path!r} cannot be read")
+        data = read_indexable(file, self.settings.max_file_bytes)
+        if data is None:
+            raise LookupError(f"{path!r} is no longer readable on the server; re-index {project!r}")
+        lines = redact(decode(data))[0].splitlines()
+        start = max(1, start_line or 1)
+        end = min(len(lines), end_line or start + MAX_READ_LINES - 1, start + MAX_READ_LINES - 1)
+        return {"project": project, "path": path, "start_line": start, "end_line": end, "total_lines": len(lines),
+                "code": "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, end + 1))}
 
     def assets(self, who: Principal, project: str) -> dict[str, str]:
         project = self._readable(who, project)

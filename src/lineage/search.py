@@ -13,6 +13,7 @@ RRF_K = 60
 CANDIDATES = 60
 MAX_TOP_N = 25
 TERM_CANDIDATES = 5
+TIE_BREAK = 0.01
 
 
 def _rank_chunks(store: Store, embedder: Embedder, query: str, systems: Scope) -> tuple[list[tuple[int, float]], dict[int, ChunkRow]]:
@@ -27,7 +28,9 @@ def _rank_chunks(store: Store, embedder: Embedder, query: str, systems: Scope) -
 
 
 def search_code(store: Store, embedder: Embedder, query: str, systems: Scope, top_n: int = 8) -> list[SearchHit]:
-    """Top files for a query. File score = best chunk + a quarter of its other matching chunks."""
+    """Top files for a query, ranked by their best chunk (max-passage). Summing chunks would let
+    any big file outvote the one function that matters: ten getters mentioning "total" beat
+    calculateOrderTotal. The second-best chunk only breaks ties."""
     top_n = max(1, min(top_n, MAX_TOP_N))
     ranked, rows = _rank_chunks(store, embedder, query, systems)
     files: dict[tuple[str, str], dict] = {}
@@ -36,10 +39,12 @@ def search_code(store: Store, embedder: Embedder, query: str, systems: Scope, to
         if row is None:
             continue
         f = files.get((row.system_id, row.path))
-        if f is None:
-            files[(row.system_id, row.path)] = {"score": score, "best": row, "symbols": _sym(row)}
+        if f is None:  # ranked is best-first, so the first chunk seen is the file's best
+            files[(row.system_id, row.path)] = {"score": score, "best": row, "symbols": _sym(row), "second": 0.0}
         else:
-            f["score"] += 0.25 * score
+            if not f["second"]:
+                f["second"] = score
+                f["score"] += TIE_BREAK * score
             f["symbols"] += _sym(row)
     hits = []
     for (system_id, path), f in sorted(files.items(), key=lambda kv: -kv[1]["score"])[:top_n]:

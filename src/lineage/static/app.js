@@ -162,6 +162,7 @@ const TABS = [
 
 async function projectView(project, tab) {
   const role = roleOf(project);
+  projectsCache = await api("/api/projects");
   const maintainer = role === "admin" || role === "maintainer";
   const [body, jobs] = await Promise.all([
     ({ dictionary: dictionaryTab, rules: rulesTab, links: linksTab, connect: connectTab, people: maintainersTab }[tab]
@@ -170,12 +171,25 @@ async function projectView(project, tab) {
   pollWhile(jobActive(jobs[0]));
   return h("div", {},
     h("div", { class: "row spread" },
-      h("div", {}, h("h1", {}, project), h("span", { class: "muted" }, "Your role: ", role), jobLine(jobs[0])),
+      h("div", {}, h("h1", {}, project), describe(project, maintainer),
+        h("span", { class: "muted" }, "Your role: ", role), jobLine(jobs[0])),
       maintainer && h("button", { disabled: jobActive(jobs[0]), onclick: action(() =>
           api(`/api/projects/${encodeURIComponent(project)}/reindex`, {}), "Re-index started") }, "Re-index")),
     h("nav", { class: "tabs" }, TABS.map(([id, label]) =>
       h("a", { href: `#/p/${encodeURIComponent(project)}/${id}`, class: id === tab ? "on" : null }, label))),
     body);
+}
+
+// One line saying what the system is ("backend: orders, pricing"). Agents use it to tell systems apart.
+let projectsCache = [];
+function describe(project, maintainer) {
+  const current = (projectsCache.find((p) => p.id === project) || {}).description || "";
+  if (!maintainer) return h("p", { class: "muted" }, current || "No description yet.");
+  const input = h("input", { type: "text", value: current, maxlength: 500,
+    placeholder: "What this system is, e.g. backend: orders, pricing, payment authorisation" });
+  return h("form", { class: "row", onsubmit: action(() =>
+      api(`/api/projects/${encodeURIComponent(project)}/description`, { description: input.value })) },
+    input, h("button", { type: "submit", class: "small" }, "Save"));
 }
 
 // Review buttons shared by dictionary, rules and code links.

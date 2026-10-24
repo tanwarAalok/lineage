@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from lineage.models import Chunk, ParsedFile
 from lineage.store.base import ChunkRow, Scope, TermMapping
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FIRST_SHARED_VERSION = 3  # older schemas only ever existed in local pre-release POCs
 
 # Shared databases hold people's rules and dictionaries, so schema changes are migrations, never
@@ -28,12 +28,14 @@ MIGRATIONS: dict[int, list[str]] = {
         "create unique index if not exists jobs_one_active on jobs(system_id)"
         " where status in ('queued', 'running')",
     ],
+    # What each system is ("backend: orders, pricing"), so agents can map "the backend" to a project.
+    4: ["alter table systems add column description text"],
 }
 
 # {id} = auto-increment primary key, {ref} = integer foreign key type, per dialect.
 COMMON_DDL = """
 create table if not exists meta(key text primary key, value text not null);
-create table if not exists systems(id text primary key, name text not null, root text not null);
+create table if not exists systems(id text primary key, name text not null, root text not null, description text);
 create table if not exists files(
     id {id},
     system_id text not null references systems(id) on delete cascade,
@@ -195,6 +197,9 @@ class SqlStore:
                       " on conflict(id) do update set name = excluded.name, root = excluded.root",
                       (system_id, name, root))
 
+    def is_indexed(self, system_id: str, path: str) -> bool:
+        return self._one("select 1 as x from files where system_id = ? and path = ?", (system_id, path)) is not None
+
     def file_hashes(self, system_id: str) -> dict[str, str]:
         return {r["path"]: r["hash"] for r in self._all("select path, hash from files where system_id = ?", (system_id,))}
 
@@ -266,9 +271,12 @@ class SqlStore:
     def systems(self, systems: Scope) -> list[dict]:
         clause, params = scope_clause("s.id", systems)
         return self._all(
-            "select s.id, s.name, s.root, count(f.id) as files, max(f.indexed_at) as indexed_at"
+            "select s.id, s.name, s.root, s.description, count(f.id) as files, max(f.indexed_at) as indexed_at"
             f" from systems s left join files f on f.system_id = s.id where 1=1{clause}"
-            " group by s.id, s.name, s.root order by s.id", params)
+            " group by s.id, s.name, s.root, s.description order by s.id", params)
+
+    def set_description(self, system_id: str, description: str | None) -> bool:
+        return self._count("update systems set description = ? where id = ?", (description, system_id)) > 0
 
     def system_exists(self, system_id: str) -> bool:
         return self._one("select 1 as x from systems where id = ?", (system_id,)) is not None
