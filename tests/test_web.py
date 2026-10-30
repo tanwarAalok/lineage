@@ -1,7 +1,7 @@
 import pytest
 from starlette.testclient import TestClient
 
-from lineage.server import build_server
+from lineage.server import build_server, http_app
 from lineage.web import register_web
 
 
@@ -9,7 +9,7 @@ from lineage.web import register_web
 def client(env):
     mcp, app = build_server(env.settings, http=True)
     register_web(mcp, app)
-    with TestClient(mcp.streamable_http_app()) as c:
+    with TestClient(http_app(mcp, app), base_url="http://127.0.0.1:8000") as c:  # a Host the MCP SDK accepts
         yield c
 
 
@@ -23,6 +23,17 @@ def test_page_served_with_security_headers(client):
     assert "script-src 'self'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_mcp_endpoint_refuses_bad_tokens_before_the_handshake(client, env):
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}
+    accept = {"Accept": "application/json, text/event-stream"}
+    r = client.post("/mcp", json=init, headers=accept)
+    assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Bearer")
+    assert client.post("/mcp", json=init, headers={**accept, "Authorization": "Bearer lin_nope"}).status_code == 401
+    ok = client.post("/mcp?project=billing", json=init, headers={**accept, **auth(env, "bob")})
+    assert ok.status_code == 200
 
 
 def test_api_requires_a_valid_token(client):

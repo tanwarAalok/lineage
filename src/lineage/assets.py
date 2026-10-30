@@ -45,8 +45,11 @@ def render_assets(store: Store, system_id: str) -> dict[str, str]:
         ],
     }
     return {
+        # One body, the file name each agent looks for: Codex/Cursor/most agents, Copilot, Claude, Gemini.
         "AGENTS.md": body,
         "copilot-instructions.md": body,
+        "CLAUDE.md": body,
+        "GEMINI.md": body,
         "glossary.yaml": yaml.safe_dump(glossary, sort_keys=False, allow_unicode=True),
     }
 

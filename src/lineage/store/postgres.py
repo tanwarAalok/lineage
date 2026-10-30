@@ -18,7 +18,7 @@ from typing import Any, Sequence
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.errors import UndefinedColumn
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from lineage.store.base import Scope
 from lineage.store.sql import COMMON_DDL, SqlStore, scope_clause
@@ -102,7 +102,12 @@ class _Pool:
             max_idle=300, max_lifetime=3600, name=f"lineage-{schema}",
             # prepare_threshold=None: no server-side prepared statements, so poolers like PgBouncer work.
             kwargs={"autocommit": True, "row_factory": dict_row, "prepare_threshold": None})
-        self._initialize()
+        try:
+            self._initialize()
+        except PoolTimeout as e:
+            self.pool.close()
+            raise RuntimeError(f"cannot reach the database at {describe(conninfo)}: check that it is running, "
+                               "the host/port, credentials and firewall (`lineage db check` retries it)") from e
 
     def _initialize(self) -> None:
         """Create or migrate the schema once per process; an advisory lock serialises servers."""

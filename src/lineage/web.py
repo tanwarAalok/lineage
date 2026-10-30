@@ -37,7 +37,8 @@ STATIC = {
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
 }
-ASSET_TYPES = {"AGENTS.md": "text/markdown", "copilot-instructions.md": "text/markdown", "glossary.yaml": "text/yaml"}
+ASSET_TYPES = {"AGENTS.md": "text/markdown", "copilot-instructions.md": "text/markdown", "CLAUDE.md": "text/markdown",
+               "GEMINI.md": "text/markdown", "glossary.yaml": "text/yaml"}
 
 Handler = Callable[[Principal, dict, dict], Any]
 

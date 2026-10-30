@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _serve(p: argparse.ArgumentParser, args, settings) -> int:
-    from lineage.server import build_server
+    from lineage.server import build_server, http_app
     if args.transport == "stdio":
         build_server(settings, http=False)[0].run("stdio")
         return 0
@@ -123,7 +123,7 @@ def _serve(p: argparse.ArgumentParser, args, settings) -> int:
             "so every member shares one database")
     scheme = "https" if tls else "http"
     logging.getLogger("lineage").info("web UI at %s://%s:%s/  MCP at /mcp", scheme, args.host, args.port)
-    uvicorn.run(mcp.streamable_http_app(host=args.host), host=args.host, port=args.port,
+    uvicorn.run(http_app(mcp, app, host=args.host), host=args.host, port=args.port,
                 ssl_certfile=args.tls_cert, ssl_keyfile=args.tls_key, log_level="info")
     return 0
 

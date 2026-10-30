@@ -12,6 +12,7 @@ from typing import Callable, TypeVar
 import anyio
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from starlette.responses import JSONResponse
 
 from lineage.auth import Principal
 from lineage.config import Settings
@@ -38,6 +39,26 @@ def bearer(authorization: str | None) -> str | None:
     return None
 
 
+def http_app(mcp: MCPServer, app: Lineage, host: str = "127.0.0.1"):
+    """The HTTP app (MCP at /mcp, plus web routes registered on `mcp`). A bad or missing token is
+    refused with 401 before the MCP handshake: otherwise clients show the server as connected and
+    every call fails afterwards, which hides a misconfigured token."""
+    inner = mcp.streamable_http_app(host=host)
+
+    async def asgi(scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/mcp"):
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+            who = await anyio.to_thread.run_sync(app.authenticate, bearer(headers.get("authorization")))
+            if who is None:
+                response = JSONResponse({"error": "missing or invalid Lineage token (Authorization: Bearer ...)"},
+                                        status_code=401, headers={"WWW-Authenticate": 'Bearer realm="lineage"'})
+                await response(scope, receive, send)
+                return
+        await inner(scope, receive, send)
+
+    return asgi
+
+
 def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lineage]:
     app = Lineage(settings)
     app.recover_jobs()
@@ -51,7 +72,9 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
         who = app.authenticate(bearer(headers.get("authorization")))
         if who is None:
             raise PermissionError("missing or invalid Lineage token (Authorization: Bearer ...)")
-        return who, headers.get("x-lineage-project") or None
+        # The repo's project: a header, or ?project= on the URL for tools where headers are awkward.
+        query = getattr(ctx.request_context.request, "query_params", None) or {}
+        return who, headers.get("x-lineage-project") or query.get("project") or None
 
     async def run(ctx: Context, fn: Callable[..., T], *args, project: str | None = None, **kw) -> T:
         def call() -> T:

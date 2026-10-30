@@ -297,26 +297,81 @@ async function linksTab(project, maintainer) {
         h("div", {}, h("button", { class: "primary", type: "submit" }, "Suggest")))));
 }
 
+// Setup for each AI tool. Tokens never go in committed files: each developer supplies their own.
+const CLIENTS = {
+  vscode: {
+    label: "VS Code (Copilot)",
+    file: ".vscode/mcp.json",
+    note: "Commit it. VS Code asks each developer for their token once.",
+    instructions: [["copilot-instructions.md", ".github/copilot-instructions.md"]],
+    config: (url, project) => JSON.stringify({
+      inputs: [{ type: "promptString", id: "lineage-token", description: "Lineage access token", password: true }],
+      servers: { lineage: { type: "http", url, headers: { Authorization: "Bearer ${input:lineage-token}", "X-Lineage-Project": project } } },
+    }, null, 2),
+  },
+  claude: {
+    label: "Claude Code",
+    file: "run once in the repository",
+    note: "--scope local keeps your token in your own Claude config, never in the repository.",
+    instructions: [["CLAUDE.md", "CLAUDE.md (repository root)"]],
+    config: (url, project) =>
+      `claude mcp add --transport http --scope local lineage "${url}?project=${project}" \\\n  --header "Authorization: Bearer <your Lineage token>"`,
+  },
+  codex: {
+    label: "Codex",
+    file: ".codex/config.toml (or ~/.codex/config.toml)",
+    note: "Set LINEAGE_TOKEN in your environment; Codex sends it as the bearer token.",
+    instructions: [["AGENTS.md", "AGENTS.md (repository root)"]],
+    config: (url, project) =>
+      `[mcp_servers.lineage]\nurl = "${url}"\nbearer_token_env_var = "LINEAGE_TOKEN"\nhttp_headers = { "X-Lineage-Project" = "${project}" }`,
+  },
+  cursor: {
+    label: "Cursor",
+    file: ".cursor/mcp.json",
+    note: "Commit it. Each developer sets LINEAGE_TOKEN in the environment Cursor starts from.",
+    instructions: [["AGENTS.md", "AGENTS.md (repository root)"]],
+    config: (url, project) => JSON.stringify({
+      mcpServers: { lineage: { url: `${url}?project=${project}`, headers: { Authorization: "Bearer ${env:LINEAGE_TOKEN}" } } },
+    }, null, 2),
+  },
+  gemini: {
+    label: "Gemini CLI",
+    file: ".gemini/settings.json",
+    note: "Commit it. Each developer sets LINEAGE_TOKEN in their environment.",
+    instructions: [["GEMINI.md", "GEMINI.md (repository root)"]],
+    config: (url, project) => JSON.stringify({
+      mcpServers: { lineage: { httpUrl: `${url}?project=${project}`, headers: { Authorization: "Bearer $LINEAGE_TOKEN" } } },
+    }, null, 2),
+  },
+  other: {
+    label: "Other MCP clients",
+    file: "your client's MCP settings",
+    note: "Any client with streamable HTTP works. For stdio-only clients, bridge with: npx mcp-remote <url> --header \"Authorization: Bearer <token>\"",
+    instructions: [["AGENTS.md", "AGENTS.md (repository root)"]],
+    config: (url, project) =>
+      `Transport:  streamable HTTP\nURL:        ${url}?project=${project}\nHeader:     Authorization: Bearer <your Lineage token>\n(optional)  X-Lineage-Project: ${project}`,
+  },
+};
+let connectClient = "vscode";
+
 function connectTab(project) {
-  const config = JSON.stringify({
-    inputs: [{ type: "promptString", id: "lineage-token", description: "Lineage access token", password: true }],
-    servers: { lineage: { type: "http", url: `${location.origin}/mcp`,
-      headers: { Authorization: "Bearer ${input:lineage-token}", "X-Lineage-Project": project } } },
-  }, null, 2);
+  const client = CLIENTS[connectClient];
+  const config = client.config(`${location.origin}/mcp`, project);
   return h("div", { class: "stack" },
+    h("div", { class: "filters" }, Object.entries(CLIENTS).map(([id, c]) =>
+      h("button", { class: "small" + (id === connectClient ? " on" : ""), onclick: () => { connectClient = id; render(); } }, c.label))),
     h("div", { class: "panel stack" },
-      h("h2", {}, "1. Point your repository at this project"),
-      h("p", {}, "Save this as ", h("code", {}, ".vscode/mcp.json"), " in your repository and commit it. VS Code asks each developer for their own token once; tokens are never committed."),
+      h("h2", {}, "1. Connect ", client.label, " to this project"),
+      h("p", {}, h("code", {}, client.file), ". ", client.note),
       h("pre", {}, config),
       h("div", {}, h("button", { onclick: () => copy(config) }, "Copy"))),
     h("div", { class: "panel stack" },
-      h("h2", {}, "2. Add the agent instructions (optional)"),
-      h("p", {}, "Generated from the approved rules and dictionary. Commit them so agents without the MCP server still follow the rules."),
-      h("div", { class: "row" },
-        h("button", { onclick: () => download(project, "copilot-instructions.md") }, "copilot-instructions.md"),
-        h("button", { onclick: () => download(project, "AGENTS.md") }, "AGENTS.md"),
+      h("h2", {}, "2. Add the agent instructions"),
+      h("p", {}, "Generated from this project's approved rules, dictionary and system map, so the agent knows the other systems exist and how to reach them. Re-download after rules change."),
+      h("div", { class: "row" }, client.instructions.map(([name, where]) =>
+        h("button", { onclick: () => download(project, name) }, `Download ${name}`)),
         h("button", { onclick: () => download(project, "glossary.yaml") }, "glossary.yaml")),
-      h("p", { class: "muted" }, "Place copilot-instructions.md in .github/ and AGENTS.md at the repository root.")));
+      h("p", { class: "muted" }, "Save it as ", client.instructions.map(([, where]) => where).join(", "), ".")));
 }
 
 async function maintainersTab(project) {
