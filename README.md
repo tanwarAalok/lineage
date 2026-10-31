@@ -11,6 +11,7 @@ Lineage gives Copilot, Claude, Codex, Cursor and any MCP agent a map of *every* 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![MCP](https://img.shields.io/badge/MCP-server-6f42c1)
 ![Postgres](https://img.shields.io/badge/storage-Postgres%20%2B%20pgvector-336791)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [Quickstart](#quickstart) · [How it works](#how-it-works) · [Tools](#mcp-tools) · [Deploy for a team](docs/deployment.md) · [Security](docs/security.md) · [Roadmap](#roadmap)
 
@@ -241,3 +242,7 @@ src/lineage/
 Known limits, each with an upgrade path: calls resolve by bare name (same-named methods share
 callers); summaries come from docstrings and signatures, not an LLM; COBOL paragraphs and Kotlin
 methods are not yet separate symbols.
+
+## License
+
+[MIT](LICENSE)

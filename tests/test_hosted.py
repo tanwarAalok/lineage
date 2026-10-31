@@ -97,7 +97,9 @@ def test_least_privilege_role_with_dba_prepared_schema(postgres_url, tmp_path):
         admin.execute("revoke create on database postgres from public")
         admin.execute("create schema app authorization lineage_app")
     p = conninfo_to_dict(postgres_url)
-    app_url = f"postgresql://lineage_app:app-pw@{p['host']}:{p['port']}/{p['dbname']}"
+    # Windows gets host + port; Linux gets a Unix socket directory and no port.
+    server = f"@/{p['dbname']}?host={p['host']}" if p["host"].startswith("/") else f"@{p['host']}:{p['port']}/{p['dbname']}"
+    app_url = f"postgresql://lineage_app:app-pw{server}"
     repos = tmp_path / "repos"
     (repos / "svc").mkdir(parents=True)
     (repos / "svc" / "orders.py").write_text('"""Orders."""\ndef place_order(c):\n    return c\n', encoding="utf-8")
