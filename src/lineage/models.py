@@ -34,6 +34,8 @@ class ParsedFile:
     symbols: list[Symbol]
     chunks: list[Chunk]
     redactions: int = 0
+    # (cr_id, line, enclosing symbol name) for every change-request id mentioned in the file
+    cr_mentions: list[tuple[str, int, str | None]] = field(default_factory=list)
 
 
 @dataclass

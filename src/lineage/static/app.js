@@ -126,6 +126,7 @@ function loginView() {
 function navView() {
   $nav.replaceChildren(
     h("a", { href: "#/" }, "Projects"),
+    h("a", { href: "#/crs" }, "Change requests"),
     me.is_admin && h("a", { href: "#/people" }, "People"),
     h("span", { class: "muted" }, me.name, me.is_admin ? " · admin" : ""),
     h("button", { class: "link", onclick: logout }, "Sign out"));
@@ -392,6 +393,88 @@ async function maintainersTab(project) {
         h("div", {}, h("button", { class: "primary", type: "submit" }, "Make maintainer")))));
 }
 
+// ---------- change requests
+const crEditor = () => me.is_admin || me.maintains.length > 0;
+const crLink = (id) => h("a", { href: `#/crs/${encodeURIComponent(id)}` }, id);
+
+async function crsView() {
+  const crs = await api("/api/crs");
+  const f = { id: h("input", { type: "text", required: true, placeholder: "CR-3002" }),
+    title: h("input", { type: "text", required: true }),
+    summary: h("textarea", { placeholder: "What changes, for whom, and why" }),
+    depends: h("input", { type: "text", placeholder: "CR-3001 (built on top of)" }),
+    refs: h("input", { type: "text", placeholder: "related CRs, comma-separated" }) };
+  return h("div", { class: "stack" },
+    h("div", {}, h("h1", {}, "Change requests"),
+      h("p", { class: "muted" }, "Each CR records the contracts systems agree, the decisions made, and which CRs it builds on. Lineage links code and commits that mention a CR id automatically.")),
+    h("div", { class: "panel table-wrap" }, crs.length
+      ? h("table", {}, h("thead", {}, h("tr", {}, ["CR", "Title", "Status", "Builds on", "Updated"].map((c) => h("th", {}, c)))),
+          h("tbody", {}, crs.map((c) => h("tr", {}, h("td", {}, crLink(c.cr)), h("td", {}, c.title), h("td", {}, h("span", { class: "badge" }, c.status)),
+            h("td", {}, c.depends_on.length ? c.depends_on.flatMap((d, i) => [i ? ", " : "", crLink(d)]) : "-"), h("td", { class: "muted" }, when(c.updated_at))))))
+      : h("div", { class: "empty" }, "No change requests yet.")),
+    crEditor() && h("div", { class: "panel" }, h("h2", {}, "Register a change request"),
+      h("form", { class: "inline", onsubmit: action(async () => {
+          await api("/api/crs", { id: f.id.value, title: f.title.value, summary: f.summary.value, depends_on: f.depends.value, references: f.refs.value });
+          location.hash = `#/crs/${encodeURIComponent(f.id.value.trim().toUpperCase())}`;
+        }, "Registered") },
+        h("label", {}, "Id", f.id), h("label", {}, "Title", f.title), h("label", {}, "Summary", f.summary),
+        h("label", {}, "Depends on", f.depends), h("label", {}, "References", f.refs),
+        h("div", {}, h("button", { class: "primary", type: "submit" }, "Register")))));
+}
+
+async function crView(id) {
+  const c = await api(`/api/crs/${encodeURIComponent(id)}`);
+  const review = (kind, itemId, status) => action(() => api(`/api/${kind}/${itemId}/review`, { status }), `Marked ${status}`);
+  const pf = { provider: h("input", { type: "text", required: true, placeholder: "order-service" }),
+    name: h("input", { type: "text", required: true, placeholder: "REST POST /orders" }),
+    spec: h("textarea", { required: true, class: "mono", placeholder: "Request / response schema, event payload or config keys" }),
+    consumers: h("input", { type: "text", placeholder: "web-app, notification-service" }),
+    source: h("input", { type: "text", placeholder: "API review 2026-11-03" }) };
+  const df = { q: h("input", { type: "text", required: true }), d: h("textarea", { required: true }),
+    system: h("input", { type: "text", placeholder: "optional: the system it concerns" }) };
+  const contract = (k) => h("div", { class: "panel stack" },
+    h("div", { class: "row spread" },
+      h("div", { class: "row" }, h("strong", {}, `${k.provider} · ${k.name}`), h("span", { class: "badge" }, `v${k.version}`), badge(k.status === "agreed" ? "approved" : k.status)),
+      h("div", { class: "row" }, k.status === "proposed" && [h("button", { class: "small", onclick: review("contracts", k.id, "agreed") }, "Agree"),
+        h("button", { class: "small danger", onclick: review("contracts", k.id, "rejected") }, "Reject")])),
+    h("pre", {}, k.spec),
+    h("div", { class: "muted" }, k.consumers.length ? `consumers: ${k.consumers.join(", ")} · ` : "", `by ${k.author}`, k.source ? ` · source: ${k.source}` : ""));
+  const code = (impl) => Object.keys(impl).length
+    ? Object.entries(impl).map(([sys, v]) => h("div", {}, h("strong", {}, sys), h("ul", {},
+        v.files.map((f) => h("li", {}, h("code", {}, f.path), f.symbols.length ? ` (${f.symbols.join(", ")})` : "")),
+        v.commits.map((m) => h("li", { class: "muted" }, m)))))
+    : h("p", { class: "muted" }, "No code or commits mention this CR yet.");
+  return h("div", { class: "stack" },
+    h("div", {}, h("h1", {}, c.cr, c.title ? ` · ${c.title}` : ""),
+      h("p", {}, c.status ? h("span", { class: "badge" }, c.status) : badge("rejected"), " ", c.summary || "")),
+    c.warnings.length > 0 && h("div", { class: "secret stack" }, c.warnings.map((w) => h("div", {}, "⚠ ", w))),
+    c.builds_on.length > 0 && h("div", { class: "panel stack" }, h("h2", {}, "Builds on"),
+      c.builds_on.map((a) => h("div", {}, crLink(a.cr), ` ${a.title || "(not registered)"} · ${a.status || "?"} · ${a.contracts.length} contracts, ${a.decisions.length} decisions`))),
+    c.built_on_by.length > 0 && h("p", { class: "muted" }, "Built on by: ", c.built_on_by.flatMap((b, i) => [i ? ", " : "", crLink(b.cr)])),
+    h("h2", {}, "Contracts"),
+    c.contract_history.length ? c.contract_history.slice().reverse().map(contract) : h("p", { class: "muted" }, "No contracts yet."),
+    c.registered && h("div", { class: "panel" }, h("h2", {}, "Propose a contract (or a new version)"),
+      h("form", { class: "inline", onsubmit: action(() => api(`/api/crs/${encodeURIComponent(c.cr)}/contracts`,
+          { provider: pf.provider.value, name: pf.name.value, spec: pf.spec.value, consumers: pf.consumers.value, source: pf.source.value })) },
+        h("label", {}, "Provider system", pf.provider), h("label", {}, "Name", pf.name), h("label", {}, "Spec", pf.spec),
+        h("label", {}, "Consumers", pf.consumers), h("label", {}, "Source", pf.source),
+        h("div", {}, h("button", { class: "primary", type: "submit" }, "Propose")))),
+    h("h2", {}, "Decisions"),
+    h("div", { class: "panel table-wrap" }, c.decisions.length
+      ? h("table", {}, h("tbody", {}, c.decisions.map((d) => h("tr", {}, h("td", {}, h("strong", {}, d.question)), h("td", {}, d.decision),
+          h("td", {}, badge(d.status)), h("td", { class: "muted" }, d.system || "all", " · ", d.author),
+          h("td", { class: "actions" }, d.status === "proposed" && [h("button", { class: "small", onclick: review("decisions", d.id, "approved") }, "Approve"),
+            h("button", { class: "small danger", onclick: review("decisions", d.id, "rejected") }, "Reject")])))))
+      : h("div", { class: "empty" }, "No decisions yet.")),
+    c.registered && h("div", { class: "panel" }, h("h2", {}, "Log a decision"),
+      h("form", { class: "inline", onsubmit: action(() => api(`/api/crs/${encodeURIComponent(c.cr)}/decisions`,
+          { question: df.q.value, decision: df.d.value, system: df.system.value })) },
+        h("label", {}, "Question", df.q), h("label", {}, "Decision", df.d), h("label", {}, "System", df.system),
+        h("div", {}, h("button", { class: "primary", type: "submit" }, "Log")))),
+    h("h2", {}, "Implemented in"),
+    h("div", { class: "panel stack" }, code(c.implemented_in)));
+}
+
 let revealed = null; // a freshly issued token, shown once
 async function peopleView() {
   const users = await api("/api/users");
@@ -432,6 +515,8 @@ async function render() {
     const [, section, project, tab] = location.hash.split("/").map(decodeURIComponent);
     const view = section === "p" && project ? await projectView(project, tab || "dictionary")
       : section === "people" && me.is_admin ? await peopleView()
+      : section === "crs" && project ? await crView(project)
+      : section === "crs" ? await crsView()
       : await projectsView();
     $main.replaceChildren(view);
   } catch (e) {

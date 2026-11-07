@@ -17,7 +17,7 @@ from typing import Callable
 
 from lineage.config import Settings
 from lineage.ingest.embed import Embedder
-from lineage.ingest.parse import file_hash, parse, read_indexable, walk
+from lineage.ingest.parse import file_hash, git_cr_mentions, parse, read_indexable, walk
 from lineage.models import ParsedFile
 from lineage.store.base import Store
 
@@ -48,16 +48,16 @@ class IndexReport:
         return asdict(self)
 
 
-def _work(task: tuple[str, str, str | None, int]) -> tuple[str, str, object]:
+def _work(task: tuple[str, str, str | None, int, str]) -> tuple[str, str, object]:
     """Runs in a parser process. -> (rel, outcome, payload)."""
-    root, rel, known_hash, max_bytes = task
+    root, rel, known_hash, max_bytes, cr_pattern = task
     try:
         data = read_indexable(Path(root, rel), max_bytes)
         if data is None:
             return rel, "skipped", None
         if file_hash(data) == known_hash:
             return rel, "unchanged", None
-        return rel, "parsed", parse(rel, data)
+        return rel, "parsed", parse(rel, data, cr_pattern)
     except Exception as e:  # one strange legacy file must not stop a 20k-file run
         return rel, "failed", f"{type(e).__name__}: {e}"
 
@@ -98,7 +98,8 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
     pool = ProcessPoolExecutor(workers) if workers > 1 and len(paths) >= PARALLEL_FROM else None
     try:
         for w in range(0, len(paths), WINDOW):
-            tasks = [(str(root), rel, known.get(rel), settings.max_file_bytes) for rel in paths[w:w + WINDOW]]
+            tasks = [(str(root), rel, known.get(rel), settings.max_file_bytes, settings.cr_pattern)
+                     for rel in paths[w:w + WINDOW]]
             results = pool.map(_work, tasks, chunksize=8) if pool else map(_work, tasks)
             for rel, outcome, payload in results:
                 if outcome == "skipped":
@@ -123,6 +124,8 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
 
     gone = sorted(set(known) - keep)
     store.delete_files(system_id, gone)
+    # Commit messages naming a CR link it to the files that commit changed (history, not just code).
+    store.replace_commit_mentions(system_id, git_cr_mentions(root, settings.cr_pattern))
     report.deleted = len(gone)
     report.seconds = round(time.monotonic() - started, 2)
     tell("done", force=True)

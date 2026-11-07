@@ -73,6 +73,7 @@ rule all came through Lineage. Every call is audited, so you can prove where an 
 | --- | --- |
 | 🔎 **Cross-system search** | Hybrid keyword + vector search over every indexed system, ranked per file with a one-line meaning. Agents read code in repos they don't have open. |
 | 📖 **Project rules & dictionary** | Admins write the rules agents must follow and what design terms mean, with the **source** of each claim. Agents only ever see approved entries. |
+| 🔗 **Change-request memory** | Each CR records the API, event and config contracts systems agreed (versioned, never overwritten) and its decisions. CR ids in code and commit messages link themselves to the code. A CR built on another inherits its contracts, decisions and code, with warnings when that foundation changed or the code lags the contract. |
 | 🧭 **System map** | Each project says what it is ("orders-service: backend for orders, pricing and payments"), so "the backend" means something to an agent. |
 | 🏛️ **Built for legacy** | Tree-sitter for 30+ languages incl. COBOL, VB6, PL/SQL, Pascal, Fortran; old encodings; giant routines split so they stay searchable. |
 | 📈 **Scales** | 22,000 files indexed in ~90 s; incremental re-index in seconds; resumable after a crash. |
@@ -179,6 +180,10 @@ instead of looking connected.
 | `read_code(path, project)` | Numbered source lines from any system, even one not in the workspace. Secrets redacted, audited. |
 | `resolve_term(term)` | What a business/design term means and which code implements it, across systems. |
 | `suggest_term(term, definition, source?)` | A proposal for maintainers to review: agents never write approved knowledge. |
+| `get_cr(cr)` | A change request with everything it builds on: earlier CRs' agreed contracts, decisions and the code each system wrote, plus drift warnings, with this repo's own action items first. |
+| `get_contract(cr?, provider?, name?)` | Agreed REST/event/config contracts between systems, including those inherited from parent CRs; `history` returns every version. |
+| `list_crs()` | Registered change requests and what each depends on. |
+| `propose_contract(...)` / `log_decision(...)` | Record what the developer says was agreed: proposals for the provider's maintainers to approve. |
 | `list_projects()` | Every system, your role and the latest indexing job. |
 | `onboard_project(repo_path)` | Admins: index a new system (background job). Maintainers: re-index. |
 
@@ -210,10 +215,12 @@ Indexing is parallel, incremental by content hash, and resumable. Numbers use th
 - [x] Web UI, roles, tokens, background jobs, audit log
 - [x] Hosted Postgres: TLS, migrations, multi-server, least-privilege role
 - [x] Legacy languages and encodings; 20k+ file repos
-- [ ] **Contract registry keyed by change request (CR)**: agreed vs. implemented API contracts, with drift detection
+- [x] **Contract registry keyed by change request (CR)**, versioned, with drift warnings (code older than its contract)
+- [x] **Decision log** per CR, with authors, sources and review
+- [x] CR dependency graph: a CR inherits the contracts, decisions and code of the CRs it builds on
+- [ ] Schema-level drift detection (today: commit dates vs. contract changes)
 - [ ] `check_impact`: callers, callees and downstream systems affected by a change
-- [ ] **Decision log** with provenance: HLD → decision → LLD → generated code
-- [ ] CR dependency graph: build on top of the CRs a change depends on
+- [ ] Jira / Azure Boards import of CRs
 - [ ] HLD / Confluence ingestion (lands as `proposed`, never trusted automatically)
 
 ## Documentation

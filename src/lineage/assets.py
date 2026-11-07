@@ -22,6 +22,11 @@ its tools to workspace search, and always use them for anything outside this rep
 - `resolve_term(term)` - what a design-document (HLD/LLD) term means and which code implements it.
   `proposed` code links are unreviewed guesses.
 - `suggest_term(term, definition)` - only with the developer's explicit input; a maintainer reviews it.
+- `get_cr(cr)` - when a task mentions a change request (e.g. `CR-3002`), call this **first**: it returns
+  the CR, everything it builds on (earlier CRs' agreed contracts, decisions and code in every system)
+  and warnings. Build on that context instead of re-deriving it.
+- `get_contract(cr, provider, name)` - the agreed API/event/config contract another system provides.
+  If none exists, ask the developer, then record their answer with `propose_contract`.
 - Open only the files these tools return.
 """
 

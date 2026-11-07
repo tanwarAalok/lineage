@@ -29,7 +29,9 @@ INSTRUCTIONS = (
     "most of which are NOT in the editor's workspace. Call get_project_context first for this "
     "repository's rules, dictionary and the list of other systems. For anything that may live in "
     "another system (the backend, an upstream or downstream service), use search_code then read_code "
-    "instead of workspace search, and never conclude something is unavailable without searching here."
+    "instead of workspace search, and never conclude something is unavailable without searching here. "
+    "Whenever a task or the developer mentions a change request id (e.g. CR-3002), call get_cr before "
+    "anything else: it includes the CRs it builds on, their contracts, decisions and code."
 )
 
 
@@ -142,6 +144,48 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
                 result["code_link"] = app.link_term(who, project, term, symbol, path)
             return result
         return await run(ctx, go, project=project)
+
+    @mcp.tool()
+    async def get_cr(ctx: Context, cr: str) -> dict:
+        """Everything about a change request (e.g. CR-3002) across all systems: summary, status, the API,
+        event and config contracts it defines (with version history), decisions, and which code and
+        commits in every system implement it. Also everything it BUILDS ON: the CRs it depends on,
+        transitively, with their agreed contracts, decisions and code, plus warnings when that foundation
+        is unfinished or changed. Call this first whenever a task, branch or the developer mentions a CR
+        id, and before writing code for one."""
+        return await run(ctx, lambda who, project: app.cr_context(who, cr, project))
+
+    @mcp.tool()
+    async def get_contract(ctx: Context, cr: str | None = None, provider: str | None = None,
+                           name: str | None = None, history: bool = False) -> list[dict]:
+        """Agreed contracts between systems: REST request/response schemas, event payloads, config keys.
+        Filter by `cr` (also returns the contracts it inherits from the CRs it builds on), `provider`
+        system, and/or `name` (e.g. "REST POST /orders", "event order.placed"). history=true returns every
+        version. Use it whenever code must call, consume or configure another system."""
+        return await run(ctx, lambda who, project: app.contracts(who, cr, provider, name, history))
+
+    @mcp.tool()
+    async def list_crs(ctx: Context, status: str | None = None) -> list[dict]:
+        """Registered change requests (newest first) with status and what each depends on. `status`:
+        proposed, in_progress, implemented or cancelled."""
+        return await run(ctx, lambda who, project: app.list_crs(who, status))
+
+    @mcp.tool()
+    async def propose_contract(ctx: Context, cr: str, provider: str, name: str, spec: str,
+                               consumers: str | None = None, source: str | None = None) -> dict:
+        """Record a contract for a CR that get_contract does not have, e.g. what the provider team agreed
+        in a meeting. Only with the developer's explicit input. Stored as a proposal for the provider's
+        maintainers to agree; earlier versions stay as history. `name` like "REST POST /orders",
+        "event order.placed" or "config ORDER_EVENTS_TOPIC"; `consumers` = comma-separated systems."""
+        return await run(ctx, lambda who, project: app.propose_contract(who, cr, provider, name, spec, consumers, source))
+
+    @mcp.tool()
+    async def log_decision(ctx: Context, cr: str, question: str, decision: str, system: str | None = None,
+                           source: str | None = None) -> dict:
+        """Record a design or code-generation decision for a CR (the question, what was decided, the
+        system it concerns, and where it came from). Only with the developer's explicit input; stored as
+        a proposal for review, never overwriting earlier decisions."""
+        return await run(ctx, lambda who, project: app.log_decision(who, cr, question, decision, system, source))
 
     @mcp.tool()
     async def onboard_project(ctx: Context, repo_path: str, project: str | None = None) -> dict:

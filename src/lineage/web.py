@@ -93,6 +93,21 @@ def register_web(mcp: MCPServer, app: Lineage) -> None:
     route(P + "/maintainers", "POST", lambda who, p, b: app.set_maintainer(
         who, _s(b, "user"), p["project"], bool(b.get("maintainer"))))
     route(P + "/assets/{name}", "GET", lambda who, p, b: _asset(app, who, p["project"], p["name"]))
+    route("/api/crs", "GET", lambda who, p, b: app.list_crs(who))
+    route("/api/crs", "POST", lambda who, p, b: app.save_cr(
+        who, _s(b, "id"), _s(b, "title"), b.get("summary"), b.get("status") or "proposed",
+        _list(b.get("depends_on")), _list(b.get("references"))))
+    route("/api/crs/{cr}", "GET", lambda who, p, b: app.cr_context(who, p["cr"]))
+    route("/api/crs/{cr}/contracts", "POST", lambda who, p, b: app.propose_contract(
+        who, p["cr"], _s(b, "provider"), _s(b, "name"), _s(b, "spec"), b.get("consumers"), b.get("source"),
+        approve=bool(b.get("approve"))))
+    route("/api/crs/{cr}/decisions", "POST", lambda who, p, b: app.log_decision(
+        who, p["cr"], _s(b, "question"), _s(b, "decision"), b.get("system") or None, b.get("source"),
+        approve=bool(b.get("approve"))))
+    route("/api/contracts/{id}/review", "POST", lambda who, p, b: app.review_contract(
+        who, _int(p["id"], required=True), _s(b, "status")))
+    route("/api/decisions/{id}/review", "POST", lambda who, p, b: app.review_decision(
+        who, _int(p["id"], required=True), _s(b, "status")))
     route("/api/users", "GET", lambda who, p, b: app.users(who))
     route("/api/users", "POST", lambda who, p, b: app.create_user(who, _s(b, "name"), bool(b.get("is_admin"))))
     route("/api/users/{name}/token", "POST", lambda who, p, b: app.rotate_token(who, p["name"]))
@@ -128,6 +143,17 @@ def _s(body: dict, key: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{key} is required")
     return value
+
+
+def _list(value: Any) -> list[str]:
+    """A JSON list, or a comma-separated string (as typed in a form field)."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return value
+    raise ValueError("expected a list of CR ids")
 
 
 def _int(value: Any, required: bool = False) -> int | None:

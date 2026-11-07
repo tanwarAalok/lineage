@@ -32,6 +32,9 @@ class Settings:
     # onboard_project only accepts repos under these roots. Empty = refuse everything.
     allowed_roots: tuple[str, ...] = ()
     max_file_bytes: int = 2_000_000
+    # How change-request ids look in code comments and commit messages. Jira-style keys too,
+    # e.g. r"\b(?:CR|SHOP)-\d+\b". Matches are linked to the CR they name.
+    cr_pattern: str = r"\bCR-\d+\b"
     # Parser processes for indexing. 0 = one per CPU core (max 8).
     index_workers: int = 0
     ignore_dirs: tuple[str, ...] = (
@@ -53,6 +56,7 @@ _ENV = {
     "LINEAGE_EMBEDDER": "embedder",
     "LINEAGE_OLLAMA_URL": "ollama_url",
     "LINEAGE_ALLOWED_ROOTS": "allowed_roots",  # os.pathsep-separated
+    "LINEAGE_CR_PATTERN": "cr_pattern",
 }
 
 

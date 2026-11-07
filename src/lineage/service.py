@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
 
-from lineage import search
+from lineage import crs, search
 from lineage.assets import render_assets
 from lineage.auth import Principal, hash_token, new_token
 from lineage.config import Settings
@@ -33,6 +33,8 @@ MAX_TEXT_CHARS = 8000
 MAX_SOURCE_CHARS = 500
 STATUSES = ("proposed", "approved", "rejected")
 KINDS = ("term", "rule", "mapping")
+CR_STATUSES = ("proposed", "in_progress", "implemented", "cancelled")
+CR_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,15}-\d{1,9}$")  # CR-3001, SHOP-12
 ALL_PROJECTS = "*"
 OTHER_SYSTEMS_GUIDE = (
     "Code of the other systems is NOT in this workspace; Lineage is the only way to see it. When a "
@@ -325,6 +327,100 @@ class Lineage:
                 raise LookupError(f"{kind} {item_id} not found in {project}")
         return {"deleted": True}
 
+    # --- change requests. A CR spans systems: anyone reads, admins/maintainers register them,
+    # developers and agents propose contracts and decisions, the provider's maintainers agree them.
+
+    def save_cr(self, who: Principal, cr_id: str, title: str, summary: str | None = None, status: str = "proposed",
+                depends_on: list[str] | tuple = (), references: list[str] | tuple = ()) -> dict:
+        _require_cr_editor(who)
+        cr_id, title = _cr_id(cr_id), _text(title, MAX_TERM_CHARS, "title")
+        summary, status = _optional(summary, MAX_TEXT_CHARS, "summary"), _choice(status, CR_STATUSES, "status")
+        links = [(_cr_id(x), "depends_on") for x in depends_on] + [(_cr_id(x), "references") for x in references]
+        if any(other == cr_id for other, _ in links):
+            raise ValueError(f"{cr_id} cannot depend on or reference itself")
+        args = {"cr": cr_id, "status": status, "depends_on": list(depends_on), "references": list(references)}
+        with self._store(who, "save_cr", args) as store:
+            store.save_cr(cr_id, title, summary, status, who.name)
+            store.set_cr_links(cr_id, links)
+        return {"cr": cr_id, "title": title, "status": status, "depends_on": [o for o, k in links if k == "depends_on"],
+                "references": [o for o, k in links if k == "references"]}
+
+    def list_crs(self, who: Principal, status: str | None = None) -> list[dict]:
+        status = _choice(status, CR_STATUSES, "status") if status else None
+        with self._store(who, "list_crs", {"status": status}) as store:
+            rows = store.crs(status)
+            return [{"cr": r["id"], "title": r["title"], "status": r["status"], "summary": r["summary"],
+                     "depends_on": [l["other_id"] for l in store.cr_links(r["id"])
+                                    if l["cr_id"] == r["id"] and l["kind"] == "depends_on"],
+                     "updated_at": r["updated_at"]} for r in rows]
+
+    def cr_context(self, who: Principal, cr_id: str, project: str | None = None) -> dict:
+        """`project`: the asking repository, whose own drift is listed first with its files."""
+        cr_id = _cr_id(cr_id)
+        project = validate_system_id(project) if project and project != ALL_PROJECTS else None
+        with self._store(who, "cr_context", {"cr": cr_id, "project": project}) as store:
+            return crs.build_context(store, cr_id, project)
+
+    def contracts(self, who: Principal, cr_id: str | None = None, provider: str | None = None,
+                  name: str | None = None, history: bool = False) -> list[dict]:
+        cr_id = _cr_id(cr_id) if cr_id else None
+        provider = validate_system_id(provider) if provider else None
+        args = {"cr": cr_id, "provider": provider, "name": name, "history": history}
+        with self._store(who, "contracts", args) as store:
+            return crs.contracts_view(store, cr_id, provider, name, history)
+
+    def propose_contract(self, who: Principal, cr_id: str, provider: str, name: str, spec: str,
+                         consumers: str | None = None, source: str | None = None, approve: bool = False) -> dict:
+        """A new version of a contract for a CR. Developers and agents propose; the provider's
+        maintainers (or an admin) agree it. Earlier versions stay as history."""
+        cr_id, provider = _cr_id(cr_id), validate_system_id(provider)
+        if approve:
+            who.require(provider, "maintainer")
+        name, spec = _text(name, MAX_TERM_CHARS, "name"), _text(spec, MAX_TEXT_CHARS, "spec")
+        consumers = _optional(consumers, MAX_SOURCE_CHARS, "consumers")
+        source = _optional(source, MAX_SOURCE_CHARS, "source")
+        status = "agreed" if approve else "proposed"
+        with self._store(who, "propose_contract", {"cr": cr_id, "provider": provider, "name": name, "status": status}) as store:
+            if store.get_cr(cr_id) is None:
+                raise LookupError(f"{cr_id} is not registered; ask an admin or maintainer to register it first")
+            version = store.add_contract(cr_id, provider, name, spec, consumers, source, status, who.name)
+        return {"cr": cr_id, "provider": provider, "name": name, "version": version, "status": status}
+
+    def review_contract(self, who: Principal, contract_id: int, status: str) -> dict:
+        status = _choice(status, ("agreed", "rejected"), "status")
+        with self._store(who, "review_contract", {"id": contract_id, "status": status}) as store:
+            contract = store.get_contract(int(contract_id))
+            if contract is None:
+                raise LookupError(f"contract {contract_id} not found")
+            who.require(contract["provider"], "maintainer")
+            store.review_contract(int(contract_id), status, who.name)
+        return {"id": contract_id, "cr": contract["cr_id"], "status": status}
+
+    def log_decision(self, who: Principal, cr_id: str, question: str, decision: str, system: str | None = None,
+                     source: str | None = None, approve: bool = False) -> dict:
+        cr_id = _cr_id(cr_id)
+        system = validate_system_id(system) if system else None
+        if approve:
+            who.require(system, "maintainer") if system else _require_cr_editor(who)
+        question, decision = _text(question, MAX_TEXT_CHARS, "question"), _text(decision, MAX_TEXT_CHARS, "decision")
+        source = _optional(source, MAX_SOURCE_CHARS, "source")
+        status = "approved" if approve else "proposed"
+        with self._store(who, "log_decision", {"cr": cr_id, "system": system, "status": status}) as store:
+            if store.get_cr(cr_id) is None:
+                raise LookupError(f"{cr_id} is not registered; ask an admin or maintainer to register it first")
+            store.add_decision(cr_id, system, question, decision, source, status, who.name)
+        return {"cr": cr_id, "status": status}
+
+    def review_decision(self, who: Principal, decision_id: int, status: str) -> dict:
+        status = _choice(status, ("approved", "rejected"), "status")
+        with self._store(who, "review_decision", {"id": decision_id, "status": status}) as store:
+            d = store.get_decision(int(decision_id))
+            if d is None:
+                raise LookupError(f"decision {decision_id} not found")
+            who.require(d["system_id"], "maintainer") if d["system_id"] else _require_cr_editor(who)
+            store.review_decision(int(decision_id), status, who.name)
+        return {"id": decision_id, "cr": d["cr_id"], "status": status}
+
     # --- people (admin). Everyone is a developer everywhere; admins grant maintainer per project.
 
     def maintainers(self, who: Principal, project: str) -> list[dict]:
@@ -373,6 +469,19 @@ class Lineage:
             if not store.set_disabled(name, disabled):
                 raise LookupError(f"unknown user {name!r}")
         return {"name": name, "disabled": disabled}
+
+
+def _cr_id(value: str) -> str:
+    value = (value or "").strip().upper() if isinstance(value, str) else ""
+    if not CR_ID_RE.fullmatch(value):
+        raise ValueError(f"not a change-request id: {value!r} (expected e.g. CR-3001)")
+    return value
+
+
+def _require_cr_editor(who: Principal) -> None:
+    """Registering CRs and approving CR-wide decisions: admins, or maintainers of any project."""
+    if not (who.is_admin or who.roles):
+        raise PermissionError(f"{who.name} needs to be an admin or a maintainer to do this")
 
 
 def _job_summary(job: dict | None) -> dict | None:

@@ -102,7 +102,7 @@ def file_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def parse(rel: str, data: bytes) -> ParsedFile:
+def parse(rel: str, data: bytes, cr_pattern: str = r"\bCR-\d+\b") -> ParsedFile:
     text, redactions = redact(decode(data))
     lines = text.splitlines()
     lang = _language(rel)
@@ -113,7 +113,49 @@ def parse(rel: str, data: bytes) -> ParsedFile:
     return ParsedFile(
         path=rel, language=lang or "text", hash=file_hash(data), summary=summary,
         symbols=symbols, chunks=_chunks(rel, text, lines, symbols, summary), redactions=redactions,
+        cr_mentions=_cr_mentions(lines, symbols, cr_pattern),
     )
+
+
+def _cr_mentions(lines: list[str], symbols: list[Symbol], pattern: str) -> list[tuple[str, int, str | None]]:
+    """Change-request ids in comments or code, with the symbol each sits in: links code to CRs
+    with no manual bookkeeping."""
+    regex = re.compile(pattern, re.IGNORECASE)
+    owner = _owner_by_line(symbols, len(lines)) if symbols else []
+    found: dict[tuple[str, int], str | None] = {}
+    for n, line in enumerate(lines, start=1):
+        for cr in regex.findall(line):
+            i = owner[n] if n < len(owner) else None
+            found.setdefault((cr.upper(), n), symbols[i].name if i is not None else None)
+    return [(cr, n, sym) for (cr, n), sym in found.items()]
+
+
+def git_cr_mentions(root: Path, pattern: str, max_commits: int = 5000) -> list[tuple[str, str, str]]:
+    """(cr_id, path, "hash date author: subject") for files changed by commits whose message names
+    a CR. Empty when root is not a git repository."""
+    if not (root / ".git").exists():
+        return []
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "log", f"-n{max_commits}", "--name-only", "--date=short",
+             "--format=%x1e%h%x1f%ad%x1f%an%x1f%s%x1f%b%x1f"],
+            capture_output=True, check=True, timeout=120).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("git log failed for %s: %s", root, e)
+        return []
+    regex = re.compile(pattern, re.IGNORECASE)
+    rows: list[tuple[str, str, str]] = []
+    for record in out.split("\x1e")[1:]:
+        fields = record.split("\x1f")
+        if len(fields) < 6:
+            continue
+        sha, date, author, subject, body, names = fields[:6]
+        crs = {c.upper() for c in regex.findall(subject + "\n" + body)}
+        detail = f"{sha} {date} {author}: {subject}"[:300]
+        for path in (p.strip() for p in names.splitlines()):
+            if path:
+                rows += [(cr, path, detail) for cr in sorted(crs)]
+    return rows
 
 
 PLAIN_TEXT_EXTENSIONS = (".txt", ".log", ".csv")  # the pack maps .txt to vimdoc

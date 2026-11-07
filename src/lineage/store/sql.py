@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from lineage.models import Chunk, ParsedFile
 from lineage.store.base import ChunkRow, Scope, TermMapping
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 FIRST_SHARED_VERSION = 3  # older schemas only ever existed in local pre-release POCs
 
 # Shared databases hold people's rules and dictionaries, so schema changes are migrations, never
@@ -30,6 +30,8 @@ MIGRATIONS: dict[int, list[str]] = {
     ],
     # What each system is ("backend: orders, pricing"), so agents can map "the backend" to a project.
     4: ["alter table systems add column description text"],
+    # Change-request tables are new tables, which COMMON_DDL creates on every start.
+    5: [],
 }
 
 # {id} = auto-increment primary key, {ref} = integer foreign key type, per dialect.
@@ -93,6 +95,37 @@ create table if not exists jobs(
 create index if not exists jobs_system on jobs(system_id, id);
 -- One active index job per project, enforced by the database across every Lineage server.
 create unique index if not exists jobs_one_active on jobs(system_id) where status in ('queued', 'running');
+-- Change requests: the unit cross-system work is agreed, built and remembered in.
+create table if not exists crs(
+    id text primary key, title text not null, summary text,
+    status text not null check(status in ('proposed', 'in_progress', 'implemented', 'cancelled')),
+    created_by text not null, created_at text not null, updated_at text not null);
+-- depends_on: built on top of the other CR. references: related context.
+create table if not exists cr_links(
+    cr_id text not null references crs(id) on delete cascade, other_id text not null,
+    kind text not null check(kind in ('depends_on', 'references')),
+    primary key(cr_id, other_id, kind));
+-- An API/event/config contract a system provides for a CR. Versions are never overwritten.
+create table if not exists contracts(
+    id {id}, cr_id text not null references crs(id) on delete cascade,
+    provider text not null, name text not null, version integer not null, spec text not null,
+    consumers text, source text,
+    status text not null check(status in ('proposed', 'agreed', 'rejected')),
+    author text not null, reviewer text, created_at text not null,
+    unique(cr_id, provider, name, version));
+create index if not exists contracts_provider on contracts(provider, name);
+create table if not exists decisions(
+    id {id}, cr_id text not null references crs(id) on delete cascade, system_id text,
+    question text not null, decision text not null, source text,
+    status text not null check(status in ('proposed', 'approved', 'rejected')),
+    author text not null, reviewer text, created_at text not null);
+-- Where code and commits name a CR; found by the indexer, rebuilt with each file / each run.
+create table if not exists cr_mentions(
+    cr_id text not null, system_id text not null references systems(id) on delete cascade,
+    file_id {ref} references files(id) on delete cascade, path text not null, line integer,
+    symbol_name text, source text not null check(source in ('code', 'commit')), detail text);
+create index if not exists cr_mentions_cr on cr_mentions(cr_id);
+create index if not exists cr_mentions_system on cr_mentions(system_id, source);
 create table if not exists audit_log(
     id {id}, ts text not null, actor text not null, tool text not null, args text not null);
 """
@@ -229,6 +262,11 @@ class SqlStore:
             if edges:
                 self._executemany("insert into edges(src_symbol, dst_name, type) values (?, ?, 'calls')", edges)
             self._insert_chunks(system_id, chunks)
+            mentions = [(cr, system_id, fid, p.path, line, sym) for fid, (p, _) in zip(file_ids, batch)
+                        for cr, line, sym in p.cr_mentions]
+            if mentions:
+                self._executemany("insert into cr_mentions(cr_id, system_id, file_id, path, line, symbol_name, source)"
+                                  " values (?, ?, ?, ?, ?, ?, 'code')", mentions)
 
     def delete_files(self, system_id: str, paths: Sequence[str]) -> None:
         with self._tx():
@@ -458,6 +496,95 @@ class SqlStore:
         return self._count("update jobs set status = 'interrupted', finished_at = ?"
                            " where status in ('queued', 'running') and (heartbeat_at is null or heartbeat_at < ?)",
                            (now(), older_than))
+
+    # ----- change requests
+
+    def save_cr(self, cr_id: str, title: str, summary: str | None, status: str, user: str) -> None:
+        self._execute(
+            "insert into crs(id, title, summary, status, created_by, created_at, updated_at) values (?,?,?,?,?,?,?)"
+            " on conflict(id) do update set title = excluded.title, summary = excluded.summary,"
+            " status = excluded.status, updated_at = excluded.updated_at",
+            (cr_id, title, summary, status, user, now(), now()))
+
+    def set_cr_links(self, cr_id: str, links: Sequence[tuple[str, str]]) -> None:
+        with self._tx():
+            self._execute("delete from cr_links where cr_id = ?", (cr_id,))
+            if links:
+                self._executemany("insert into cr_links(cr_id, other_id, kind) values (?, ?, ?)",
+                                  [(cr_id, other, kind) for other, kind in links])
+
+    def get_cr(self, cr_id: str) -> dict | None:
+        return self._one("select * from crs where id = ?", (cr_id,))
+
+    def crs(self, status: str | None = None) -> list[dict]:
+        clause, params = (" where status = ?", [status]) if status else ("", [])
+        return self._all(f"select * from crs{clause} order by created_at desc, id", params)
+
+    def cr_links(self, cr_id: str) -> list[dict]:
+        """Outgoing links (what this CR builds on or references) and incoming ones (who builds on it)."""
+        return self._all(
+            "select cr_id, other_id, kind from cr_links where cr_id = ? or other_id = ? order by kind, cr_id, other_id",
+            (cr_id, cr_id))
+
+    def add_contract(self, cr_id: str, provider: str, name: str, spec: str, consumers: str | None,
+                     source: str | None, status: str, author: str) -> int:
+        with self._tx():
+            row = self._one("select max(version) as v from contracts where cr_id = ? and provider = ? and name = ?",
+                            (cr_id, provider, name))
+            version = (row["v"] or 0) + 1
+            self._execute(
+                "insert into contracts(cr_id, provider, name, version, spec, consumers, source, status, author,"
+                " reviewer, created_at) values (?,?,?,?,?,?,?,?,?,?,?)",
+                (cr_id, provider, name, version, spec, consumers, source, status, author,
+                 author if status != "proposed" else None, now()))
+        return version
+
+    def contracts(self, cr_ids: Sequence[str] | None = None, provider: str | None = None,
+                  name: str | None = None) -> list[dict]:
+        clause, params = scope_clause("cr_id", cr_ids)
+        if provider:
+            clause, params = clause + " and provider = ?", params + [provider]
+        if name:
+            clause, params = clause + " and lower(name) = ?", params + [name.lower()]
+        return self._all(f"select * from contracts where 1=1{clause} order by cr_id, provider, name, version", params)
+
+    def get_contract(self, contract_id: int) -> dict | None:
+        return self._one("select * from contracts where id = ?", (contract_id,))
+
+    def review_contract(self, contract_id: int, status: str, reviewer: str) -> bool:
+        return self._count("update contracts set status = ?, reviewer = ? where id = ?",
+                           (status, reviewer, contract_id)) > 0
+
+    def add_decision(self, cr_id: str, system_id: str | None, question: str, decision: str, source: str | None,
+                     status: str, author: str) -> None:
+        self._execute(
+            "insert into decisions(cr_id, system_id, question, decision, source, status, author, reviewer, created_at)"
+            " values (?,?,?,?,?,?,?,?,?)",
+            (cr_id, system_id, question, decision, source, status, author,
+             author if status != "proposed" else None, now()))
+
+    def decisions(self, cr_ids: Sequence[str] | None = None) -> list[dict]:
+        clause, params = scope_clause("cr_id", cr_ids)
+        return self._all(f"select * from decisions where 1=1{clause} order by cr_id, id", params)
+
+    def get_decision(self, decision_id: int) -> dict | None:
+        return self._one("select * from decisions where id = ?", (decision_id,))
+
+    def review_decision(self, decision_id: int, status: str, reviewer: str) -> bool:
+        return self._count("update decisions set status = ?, reviewer = ? where id = ?",
+                           (status, reviewer, decision_id)) > 0
+
+    def cr_mentions(self, cr_ids: Sequence[str]) -> list[dict]:
+        clause, params = scope_clause("cr_id", cr_ids)
+        return self._all("select cr_id, system_id, path, line, symbol_name, source, detail from cr_mentions"
+                         f" where 1=1{clause} order by cr_id, system_id, source, path, line", params)
+
+    def replace_commit_mentions(self, system_id: str, rows: Sequence[tuple[str, str, str]]) -> None:
+        with self._tx():
+            self._execute("delete from cr_mentions where system_id = ? and source = 'commit'", (system_id,))
+            if rows:
+                self._executemany("insert into cr_mentions(cr_id, system_id, path, source, detail)"
+                                  " values (?, ?, ?, 'commit', ?)", [(cr, system_id, path, d) for cr, path, d in rows])
 
     # ----- operations
 
