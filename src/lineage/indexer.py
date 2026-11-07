@@ -27,7 +27,8 @@ EMBED_BATCH = 256  # chunks per embedding call, across files
 WINDOW = 512  # files in flight at once: bounds memory however big the repo is
 PARALLEL_FROM = 300  # below this many files, process start-up costs more than it saves
 PROGRESS_EVERY_S = 2.0
-BULK_LOAD_FILES = 2000  # this many new files lets the store defer index upkeep to one build
+BULK_LOAD_FILES = 2000
+INDEX_FORMAT = 3  # bump whenever parsing/chunking output changes: forces a full re-index once  # this many new files lets the store defer index upkeep to one build
 
 Progress = Callable[[dict], None]
 
@@ -69,19 +70,26 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
     store.bind_embedder(embedder.model_id, embedder.dim)
     store.ensure_system(system_id, root.name, str(root))
     known = store.file_hashes(system_id)
+    # When what Lineage extracts from a file changes (new chunk kinds, parser fixes), unchanged files
+    # must be re-processed too: their content hash alone would skip them.
+    format_key = f"index_format:{system_id}"
+    stale_format = store.get_meta(format_key) != str(INDEX_FORMAT)
+    compare = {} if stale_format else known
     paths = list(walk(root, settings))
-    store.begin_bulk(large=len(set(paths) - set(known)) >= BULK_LOAD_FILES)
+    to_process = len(paths) if stale_format else len(set(paths) - set(known))
+    store.begin_bulk(large=to_process >= BULK_LOAD_FILES)
     report.total = len(paths)
     keep: set[str] = set()  # paths whose index entry stays (indexed, unchanged or failed)
     pending: list[ParsedFile] = []
     last_report = 0.0
 
     def flush() -> None:
-        texts = [c.text for p in pending for c in p.chunks]
+        texts = [c.text for p in pending for c in p.chunks] + [p.card for p in pending]
         vectors = embedder.embed(texts) if texts else []
+        cards = vectors[len(vectors) - len(pending):]
         batch, i = [], 0
-        for p in pending:
-            batch.append((p, vectors[i:i + len(p.chunks)]))
+        for p, card in zip(pending, cards):
+            batch.append((p, vectors[i:i + len(p.chunks)], card))
             i += len(p.chunks)
         store.replace_files(system_id, batch)  # one transaction, a few round trips, for the whole batch
         report.indexed += len(pending)
@@ -98,7 +106,7 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
     pool = ProcessPoolExecutor(workers) if workers > 1 and len(paths) >= PARALLEL_FROM else None
     try:
         for w in range(0, len(paths), WINDOW):
-            tasks = [(str(root), rel, known.get(rel), settings.max_file_bytes, settings.cr_pattern)
+            tasks = [(str(root), rel, compare.get(rel), settings.max_file_bytes, settings.cr_pattern)
                      for rel in paths[w:w + WINDOW]]
             results = pool.map(_work, tasks, chunksize=8) if pool else map(_work, tasks)
             for rel, outcome, payload in results:
@@ -126,6 +134,7 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
     store.delete_files(system_id, gone)
     # Commit messages naming a CR link it to the files that commit changed (history, not just code).
     store.replace_commit_mentions(system_id, git_cr_mentions(root, settings.cr_pattern))
+    store.set_meta(format_key, str(INDEX_FORMAT))
     report.deleted = len(gone)
     report.seconds = round(time.monotonic() - started, 2)
     tell("done", force=True)

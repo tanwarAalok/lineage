@@ -47,6 +47,9 @@ class SQLiteStore(SqlStore):
         self.db.executescript(DDL)  # idempotent and sub-millisecond, so it simply runs on every open
         with self._tx():
             self._migrate()
+            dim = self._meta("dim")
+            if dim and not self._one("select 1 as x from sqlite_master where name = 'files_vec'"):
+                self._create_file_vector_table(int(dim))  # indexes bound before file-level vectors existed
 
     def _server_info(self) -> dict:
         return {"database": "sqlite (single machine: POC and tests only)",
@@ -88,6 +91,28 @@ class SQLiteStore(SqlStore):
     def _create_vector_index(self, dim: int) -> None:
         self.db.execute(f"create virtual table if not exists chunks_vec using vec0("
                         f"embedding float[{dim}] distance_metric=cosine, system_id text)")
+        self._create_file_vector_table(dim)
+
+    def _create_file_vector_table(self, dim: int) -> None:
+        self.db.execute(f"create virtual table if not exists files_vec using vec0("
+                        f"embedding float[{dim}] distance_metric=cosine, system_id text)")
+
+    def _insert_file_vectors(self, system_id: str, rows: list[tuple[int, list[float]]]) -> None:
+        self.db.executemany("insert into files_vec(rowid, embedding, system_id) values (?, ?, ?)",
+                            [(fid, sqlite_vec.serialize_float32(v), system_id) for fid, v in rows])
+
+    def file_vector_search(self, vector: list[float], systems: Scope, limit: int) -> list[dict]:
+        if self._meta("embedder") is None:
+            return []
+        clause, params = scope_clause("system_id", systems)
+        near = self._all(f"select rowid as id, distance from files_vec where embedding match ? and k = ?{clause}"
+                         " order by distance", [sqlite_vec.serialize_float32(vector), limit, *params])
+        if not near:
+            return []
+        info = {r["id"]: r for r in self._all(
+            f"select id, system_id, path, summary from files where id in ({','.join('?' * len(near))})",
+            [n["id"] for n in near])}
+        return [{**info[n["id"]], "distance": n["distance"]} for n in near if n["id"] in info]
 
     def _insert_chunks(self, system_id: str, rows: list[tuple]) -> None:
         for file_id, symbol_id, start, end, text, vec in rows:
@@ -106,12 +131,15 @@ class SQLiteStore(SqlStore):
             if ids:  # virtual tables are outside foreign-key cascades
                 self.db.executemany("delete from chunks_fts where rowid = ?", ids)
                 self.db.executemany("delete from chunks_vec where rowid = ?", ids)
+            if self._meta("dim"):
+                self._execute("delete from files_vec where rowid in (select id from files where system_id = ? and path = ?)",
+                              (system_id, path))
             self._execute("delete from files where system_id = ? and path = ?", (system_id, path))
 
     def keyword_search(self, terms: Sequence[str], systems: Scope, limit: int) -> list[tuple[int, float]]:
         if not terms:
             return []
-        match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+        match = " OR ".join('"' + t.replace('"', '""') + '"*' for t in terms)  # prefix: stems match word forms
         clause, params = scope_clause("c.system_id", systems)
         rows = self._all(
             "select f.rowid as id, -bm25(chunks_fts) as score from chunks_fts f join chunks c on c.id = f.rowid"

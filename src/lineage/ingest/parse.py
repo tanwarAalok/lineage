@@ -113,7 +113,7 @@ def parse(rel: str, data: bytes, cr_pattern: str = r"\bCR-\d+\b") -> ParsedFile:
     return ParsedFile(
         path=rel, language=lang or "text", hash=file_hash(data), summary=summary,
         symbols=symbols, chunks=_chunks(rel, text, lines, symbols, summary), redactions=redactions,
-        cr_mentions=_cr_mentions(lines, symbols, cr_pattern),
+        cr_mentions=_cr_mentions(lines, symbols, cr_pattern), card=_file_card(rel, summary, symbols),
     )
 
 
@@ -274,7 +274,9 @@ def _owner_by_line(symbols: list[Symbol], n_lines: int) -> list[int | None]:
 
 def _chunks(rel: str, text: str, lines: list[str], symbols: list[Symbol], summary: str) -> list[Chunk]:
     head = "\n".join(lines[:FILE_HEAD_LINES])
-    chunks = [Chunk(f"{rel}\n{summary}\n{head}"[:MAX_CHUNK_CHARS], 1, min(len(lines), FILE_HEAD_LINES) or 1)]
+    head_end = min(len(lines), FILE_HEAD_LINES) or 1
+    chunks = [Chunk(f"{rel}\n{summary}\n{head}"[:MAX_CHUNK_CHARS], 1, head_end),
+              Chunk(_file_card(rel, summary, symbols), 1, head_end)]
     children: dict[int, list[Symbol]] = {}
     for s in symbols:
         if s.parent is not None:
@@ -351,6 +353,26 @@ def _comment_above(lines: list[str], start: int, top_of_file: bool = False) -> s
             block.insert(0, lines[i].strip())
             i -= 1
     return _first_line("\n".join(block))
+
+
+def _words(identifier: str) -> str:
+    """`get_countries_without_shipping_zone` / `ShippingZone` -> plain words."""
+    return " ".join(p.lower() for p in re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", identifier))
+
+
+MAX_CARD_SYMBOLS = 40
+
+
+def _file_card(rel: str, summary: str, symbols: list[Symbol]) -> str:
+    """The file described in plain words: path, summary, and its classes/functions as words with
+    their docstrings. Requirements are written in business language and code is not; embedding this
+    alongside the code closes that gap for semantic search."""
+    path = " ".join(_words(part) for part in PurePosixPath(rel).with_suffix("").parts)
+    lines = [f"{path}. {summary}"]
+    for s in symbols[:MAX_CARD_SYMBOLS]:
+        doc = s.summary if s.summary and not s.summary.startswith(s.signature[:40]) else ""
+        lines.append(f"{s.kind} {_words(s.name)}" + (f": {doc}" if doc else ""))
+    return "\n".join(lines)[:MAX_CHUNK_CHARS]
 
 
 def _first_line(doc: str) -> str:

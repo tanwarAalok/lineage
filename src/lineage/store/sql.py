@@ -154,6 +154,11 @@ class SqlStore:
         mode, so a single statement needs no _tx: over a network that saves two round trips."""
         raise NotImplementedError
     def _create_vector_index(self, dim: int) -> None: raise NotImplementedError
+    def _insert_file_vectors(self, system_id: str, rows: list[tuple[int, list[float]]]) -> None:
+        raise NotImplementedError
+    def file_vector_search(self, vector: list[float], systems: Scope, limit: int) -> list[dict]:
+        """Files nearest to the query by their plain-language card: {system_id, path, summary, distance}."""
+        raise NotImplementedError
     def _insert_chunks(self, system_id: str, rows: list[tuple]) -> None:
         """rows: (file_id, symbol_id | None, start_line, end_line, text, vector)."""
         raise NotImplementedError
@@ -191,6 +196,12 @@ class SqlStore:
     def _set_meta(self, key: str, value: str) -> None:
         self._execute("insert into meta(key, value) values (?, ?)"
                       " on conflict(key) do update set value = excluded.value", (key, value))
+
+    def get_meta(self, key: str) -> str | None:
+        return self._meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._set_meta(key, value)
 
     def _migrate(self) -> None:
         """Bring the schema to SCHEMA_VERSION. Callers hold a lock/transaction around this."""
@@ -236,24 +247,25 @@ class SqlStore:
     def file_hashes(self, system_id: str) -> dict[str, str]:
         return {r["path"]: r["hash"] for r in self._all("select path, hash from files where system_id = ?", (system_id,))}
 
-    def replace_files(self, system_id: str, batch: list[tuple[ParsedFile, list[list[float]]]]) -> None:
+    def replace_files(self, system_id: str, batch: list[tuple[ParsedFile, list[list[float]], list[float]]]) -> None:
         """Write a batch of files in one transaction with a handful of round trips, whatever the
         batch size: hosted databases are a network hop away. A crash loses at most this batch,
         which the next run re-indexes by hash."""
         if not batch:
             return
         with self._tx():
-            self._delete(system_id, [p.path for p, _ in batch])
+            self._delete(system_id, [p.path for p, *_ in batch])
             file_ids = self._insert_ids(
                 "files", ("system_id", "path", "hash", "language", "summary", "indexed_at"),
-                [(system_id, p.path, p.hash, p.language, p.summary, now()) for p, _ in batch])
+                [(system_id, p.path, p.hash, p.language, p.summary, now()) for p, *_ in batch])
+            self._insert_file_vectors(system_id, [(fid, card) for fid, (_, _, card) in zip(file_ids, batch)])
             symbol_rows = [(fid, system_id, s.name, s.kind, s.start_line, s.end_line, s.signature, s.summary)
-                           for fid, (p, _) in zip(file_ids, batch) for s in p.symbols]
+                           for fid, (p, *_) in zip(file_ids, batch) for s in p.symbols]
             all_symbol_ids = iter(self._insert_ids(
                 "symbols", ("file_id", "system_id", "name", "kind", "start_line", "end_line", "signature", "summary"),
                 symbol_rows))
             edges, chunks = [], []
-            for fid, (p, vectors) in zip(file_ids, batch):
+            for fid, (p, vectors, _) in zip(file_ids, batch):
                 assert len(vectors) == len(p.chunks)
                 sids = [next(all_symbol_ids) for _ in p.symbols]
                 edges += [(sid, callee) for sid, s in zip(sids, p.symbols) for callee in s.calls]
@@ -262,7 +274,7 @@ class SqlStore:
             if edges:
                 self._executemany("insert into edges(src_symbol, dst_name, type) values (?, ?, 'calls')", edges)
             self._insert_chunks(system_id, chunks)
-            mentions = [(cr, system_id, fid, p.path, line, sym) for fid, (p, _) in zip(file_ids, batch)
+            mentions = [(cr, system_id, fid, p.path, line, sym) for fid, (p, *_) in zip(file_ids, batch)
                         for cr, line, sym in p.cr_mentions]
             if mentions:
                 self._executemany("insert into cr_mentions(cr_id, system_id, file_id, path, line, symbol_name, source)"

@@ -25,9 +25,11 @@ class Settings:
     # Postgres only: connections per Lineage server, and a safety limit for any one query.
     db_pool_size: int = 10
     db_statement_timeout_s: int = 60
-    # "hash" (zero-dependency, lexical), "st:<model>" (sentence-transformers), "ollama:<model>".
-    # Pinned: everyone and CI must use the same value, or the index refuses to mix vectors.
-    embedder: str = "hash"
+    # "st:<model>" (local sentence-transformers model, the default), "ollama:<model>", or "hash"
+    # (lexical only, no model: fine for tiny POCs, poor for business-language requirements: on a
+    # 4.6k-file benchmark it found the right file in the top 10 for 17-33% of vague requirements,
+    # against 88% for the default model). Pinned: everyone and CI must use the same value.
+    embedder: str = "st:sentence-transformers/all-MiniLM-L6-v2"
     ollama_url: str = "http://localhost:11434"
     # onboard_project only accepts repos under these roots. Empty = refuse everything.
     allowed_roots: tuple[str, ...] = ()

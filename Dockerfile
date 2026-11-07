@@ -9,11 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[pg]"
+# CPU-only PyTorch for the default embedder (the default wheel is a ~2 GB GPU build).
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir ".[pg]"
 
 USER lineage
 # Grammars are fetched at build time so the container runs with no network access.
 RUN python -c "import tree_sitter_language_pack as t; t.download(['python','java','kotlin','scala','javascript','typescript','tsx','go','rust','c','cpp','csharp','php','ruby','swift','sql','yaml','json','markdown','bash','xml','html','css','cobol','vb','pascal','fortran','perl','tsql','groovy','powershell','batch'])"
+
+# The default embedding model is downloaded at build time too, so the container needs no network.
+ENV HF_HUB_DISABLE_TELEMETRY=1
+RUN python -c "from sentence_transformers import SentenceTransformer as S; S('sentence-transformers/all-MiniLM-L6-v2')"
 
 ENV LINEAGE_DB_URL=sqlite:////data/index.db \
     LINEAGE_ALLOWED_ROOTS=/repos \

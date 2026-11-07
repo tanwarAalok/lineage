@@ -39,8 +39,10 @@ create index if not exists chunks_tsv on chunks using gin(tsv);
 """
 
 VECTOR_INDEX = "create index if not exists chunks_embedding on chunks using hnsw (embedding vector_cosine_ops)"
+FILE_VECTOR_INDEX = ("create index if not exists files_card_embedding on files"
+                     " using hnsw (card_embedding vector_cosine_ops)")
 SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-EF_SEARCH = 200  # HNSW candidate list; high enough that per-project filtering still fills top-k
+EF_SEARCH = 400  # HNSW returns at most ef_search rows: keep it above search.CANDIDATES (300)
 LOCAL_HOSTS = ("", "localhost", "127.0.0.1", "::1")
 WEAK_SSLMODES = ("disable", "allow", "prefer")
 
@@ -129,8 +131,10 @@ class _Pool:
             store = PostgresStore.__new__(PostgresStore)
             store.db = conn
             store._migrate()
-            if store._meta("dim"):  # self-heal: a crashed bulk load may have left the vector index dropped
+            if store._meta("dim"):  # self-heal (a crashed bulk load) and upgrade (file-level vectors)
+                conn.execute(f"alter table files add column if not exists card_embedding vector({int(store._meta('dim'))})")
                 conn.execute(VECTOR_INDEX)
+                conn.execute(FILE_VECTOR_INDEX)
 
 
 _pools: dict[tuple[str, str], _Pool] = {}
@@ -226,10 +230,12 @@ class PostgresStore(SqlStore):
             # Maintaining HNSW per inserted row is ~1.3 ms/chunk; one build afterwards is ~5x faster
             # overall. Meanwhile vector search stays correct via an exact scan, just slower.
             self._execute("drop index if exists chunks_embedding")
+            self._execute("drop index if exists files_card_embedding")
 
     def end_bulk(self) -> None:
         self._execute("set maintenance_work_mem = '512MB'")
         self._execute(VECTOR_INDEX)
+        self._execute(FILE_VECTOR_INDEX)
         self._execute("reset maintenance_work_mem")
         if self._large_load:
             # Without fresh statistics the planner misjudges the new rows: searches measured 9x slower.
@@ -238,7 +244,25 @@ class PostgresStore(SqlStore):
 
     def _create_vector_index(self, dim: int) -> None:
         self._execute(f"alter table chunks add column if not exists embedding vector({dim})")
+        self._execute(f"alter table files add column if not exists card_embedding vector({dim})")
         self._execute(VECTOR_INDEX)
+        self._execute(FILE_VECTOR_INDEX)
+
+    def _insert_file_vectors(self, system_id: str, rows: list[tuple[int, list[float]]]) -> None:
+        if rows:
+            self._executemany("update files set card_embedding = ?::vector where id = ?",
+                              [(_vector(v), fid) for fid, v in rows])
+
+    def file_vector_search(self, vector: list[float], systems: Scope, limit: int) -> list[dict]:
+        clause, params = scope_clause("system_id", systems)
+        q = _vector(vector)
+        try:
+            return self._all(
+                "select system_id, path, summary, card_embedding <=> ?::vector as distance from files"
+                f" where card_embedding is not null{clause} order by card_embedding <=> ?::vector limit ?",
+                [q, *params, q, limit])
+        except UndefinedColumn:
+            return []
 
     def _insert_chunks(self, system_id: str, rows: list[tuple]) -> None:
         self._executemany(
@@ -254,7 +278,8 @@ class PostgresStore(SqlStore):
         clause, params = scope_clause("c.system_id", systems)
         rows = self._all(
             "select c.id, ts_rank(c.tsv, q) as score from chunks c, to_tsquery('simple', ?) q"
-            f" where c.tsv @@ q{clause} order by score desc limit ?", [" | ".join(terms), *params, limit])
+            f" where c.tsv @@ q{clause} order by score desc limit ?",
+            [" | ".join(f"{t}:*" for t in terms), *params, limit])  # prefix: stems match word forms
         return [(r["id"], r["score"]) for r in rows]
 
     def vector_search(self, vector: list[float], systems: Scope, limit: int) -> list[tuple[int, float]]:

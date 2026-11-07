@@ -70,6 +70,10 @@ class Lineage:
         with self.open_store() as store:
             info = store.diagnostics()
         warnings = []
+        if (info.get("embedder") or "").startswith("hash"):
+            warnings.append("index uses the 'hash' embedder (word matching only): vague, business-language "
+                            "requirements rarely find the right code. Set embedder to st:sentence-transformers/"
+                            "all-MiniLM-L6-v2 and rebuild the index.")
         if info["database"].startswith("sqlite"):
             warnings.append("SQLite is for POCs and tests; teams should use a hosted Postgres (db_url=postgresql://...)")
         if info.get("database") == "postgres":

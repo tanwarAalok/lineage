@@ -9,10 +9,10 @@ db_url: sqlite:///~/.lineage/index.db
 db_schema: lineage
 
 # Pinned for everyone and CI. Changing it means rebuilding the index.
-#   hash                                         zero-dependency, lexical only (default)
-#   st:sentence-transformers/all-MiniLM-L6-v2    pip install lineage[st]; or a local model folder path
+#   st:sentence-transformers/all-MiniLM-L6-v2    default: small local model (~90 MB, downloaded once; or a local model folder path)
 #   ollama:nomic-embed-text                      your own Ollama
-embedder: hash
+#   hash                                         word matching only, no model: tiny POCs only
+embedder: st:sentence-transformers/all-MiniLM-L6-v2
 
 # Indexing only accepts repos under these directories.
 allowed_roots:

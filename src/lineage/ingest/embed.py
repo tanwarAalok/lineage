@@ -43,7 +43,7 @@ class SentenceTransformerEmbedder:
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as e:
-            raise RuntimeError("embedder 'st:' needs `pip install lineage[st]`") from e
+            raise RuntimeError("embedder 'st:' needs sentence-transformers: `pip install sentence-transformers`") from e
         self._model = SentenceTransformer(model)
         self.dim = self._model.get_sentence_embedding_dimension()
         self.model_id = f"st:{model}"

@@ -12,11 +12,11 @@ dependencies = [
     "pyyaml>=6",
     "starlette>=0.40",
     "uvicorn>=0.30",
+    # The default embedder runs a small local model (all-MiniLM-L6-v2, ~90 MB, downloaded once).
+    "sentence-transformers>=3",
 ]
 
 [project.optional-dependencies]
-# Real semantic embeddings. Without this, the zero-dependency `hash` embedder is used.
-st = ["sentence-transformers>=3"]
 # Store everything in the client's own Postgres (with pgvector) instead of a local SQLite file.
 pg = ["psycopg[binary,pool]>=3.2"]
 dev = ["pytest>=8", "psycopg[binary,pool]>=3.2", "pgserver>=0.1"]

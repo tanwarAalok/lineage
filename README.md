@@ -124,10 +124,11 @@ Five minutes, one machine, SQLite (for a POC; teams use [hosted Postgres](docs/d
 ```sh
 git clone https://github.com/tanwarAalok/lineage.git && cd lineage
 python -m venv .venv && .venv/Scripts/activate          # macOS/Linux: source .venv/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # Linux: skip the 2 GB GPU build
 pip install -e .
 
 export LINEAGE_ALLOWED_ROOTS=~/src                      # Windows: set LINEAGE_ALLOWED_ROOTS=C:\src
-lineage index ~/src/orders-service --project orders-service
+lineage index ~/src/orders-service --project orders-service   # first run downloads the ~90 MB model
 lineage index ~/src/web-frontend   --project web-frontend
 lineage search "create order API request body"
 ```
@@ -195,6 +196,26 @@ instead of looking connected.
 | **maintainer** | optional, per project | approve suggestions, edit rules, re-index |
 | **developer** | everyone else, automatically, on every project | use any project; suggest terms, rules and code links |
 
+## Search quality
+
+Measured on [Saleor](https://github.com/saleor/saleor) (4,644 files) with 24 vague, business-language
+requirements ("Shoppers can still use promo codes after they have run out"), each with the files a
+developer would actually change pinned beforehand. 12 were used for tuning; 12 never influenced any
+decision.
+
+| Embedder | Right file in top 1 | top 3 | top 10 |
+| --- | --- | --- | --- |
+| `st:sentence-transformers/all-MiniLM-L6-v2` (**default**) | 25% | 54% | 88% |
+| `hash` (word matching, no model) | 0–8% | 8–17% | 17–33% |
+
+Search ranks files two ways, by their best code chunk and by a plain-language description of each
+file, and fuses the two: business wording rarely matches code, but it does match a file described
+in words. Given a three-requirement CR and Saleor reachable only through Lineage, Copilot named
+every correct file using `search_code` and `read_code` alone.
+
+The default model runs locally on CPU (~90 MB, downloaded on first use; the Docker image ships it).
+Point `embedder` at a local model folder for air-gapped servers, or at `ollama:<model>`.
+
 ## Performance
 
 A generated 22,000-file repo (Java, Python, JS, COBOL, PL/SQL, VB; 41 MB) on an 8-core laptop:
@@ -206,8 +227,10 @@ A generated 22,000-file repo (Java, Python, JS, COBOL, PL/SQL, VB; 41 MB) on an 
 | Search (median) | 216 ms | 60 ms |
 | Search over a 31 ms cross-region link | n/a | 133 ms |
 
-Indexing is parallel, incremental by content hash, and resumable. Numbers use the built-in
-`hash` embedder; a semantic model (`st:` or `ollama:`) improves ranking at some indexing cost.
+Indexing is parallel, incremental by content hash, and resumable. These numbers use the `hash`
+embedder to show the storage and parsing pipeline itself. With the default model, embedding dominates
+the first index on CPU (Saleor's 4,644 files: about 14 minutes, against under 2 with `hash`); re-indexing
+only re-embeds changed files, and search stays at 70–100 ms.
 
 ## Roadmap
 

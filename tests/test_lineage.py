@@ -65,6 +65,10 @@ def test_incremental_reindex(env):
     report = app.index_project(root, str(billing), "billing")
     assert (report["indexed"], report["unchanged"], report["deleted"]) == (1, 1, 1)
     assert app.search_code(root, "checkout discount")[0]["path"] == "web/cart.js"
+    with app.open_store() as store:  # file-level (card) vectors follow their file, also out of virtual tables
+        vec = app.embedder.embed(["database url"])[0]
+        found = {f["path"] for f in store.file_vector_search(vec, ["billing"], 50)}
+    assert "billing/config.py" not in found and "billing/invoice.py" in found
 
 
 def test_background_job_reports_progress(env):

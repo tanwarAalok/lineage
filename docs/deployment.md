@@ -43,7 +43,7 @@ CREATE SCHEMA lineage AUTHORIZATION lineage_app;      -- Lineage then needs no o
 ## 2. Server
 
 ```sh
-pip install -e ".[pg]"                                   # add ,st for local semantic embeddings
+pip install -e ".[pg]"                                   # first index downloads the ~90 MB embedding model once
 export LINEAGE_DB_URL=postgresql://lineage_app:***@db.internal/engineering
 export LINEAGE_ALLOWED_ROOTS=/srv/repos                  # checkouts the server may index
 lineage db check                                         # connects, migrates, reports TLS/latency
@@ -127,7 +127,7 @@ Defaults < YAML (`LINEAGE_CONFIG`, see [`config/lineage.example.yaml`](../config
 | `LINEAGE_DB_URL` | where all state lives (`postgresql://...` or `sqlite:///...`) |
 | `LINEAGE_DB_SCHEMA` | Postgres schema for Lineage's tables (default `lineage`) |
 | `LINEAGE_DB_POOL_SIZE` | connections per server (default 10) |
-| `LINEAGE_EMBEDDER` | `hash` (default), `st:<model>` or `ollama:<model>`; pinned into the index |
+| `LINEAGE_EMBEDDER` | `st:sentence-transformers/all-MiniLM-L6-v2` (default), another `st:<model>` or local model folder, `ollama:<model>`, or `hash` (word matching only); pinned into the index |
 | `LINEAGE_ALLOWED_ROOTS` | directories the server may index |
 | `LINEAGE_USER` | identity of the local admin for the CLI and stdio mode |
 
