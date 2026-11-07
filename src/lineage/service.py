@@ -335,19 +335,51 @@ class Lineage:
     # developers and agents propose contracts and decisions, the provider's maintainers agree them.
 
     def save_cr(self, who: Principal, cr_id: str, title: str, summary: str | None = None, status: str = "proposed",
-                depends_on: list[str] | tuple = (), references: list[str] | tuple = ()) -> dict:
+                depends_on: list[str] | tuple = (), references: list[str] | tuple = (), source: str | None = None) -> dict:
         _require_cr_editor(who)
         cr_id, title = _cr_id(cr_id), _text(title, MAX_TERM_CHARS, "title")
         summary, status = _optional(summary, MAX_TEXT_CHARS, "summary"), _choice(status, CR_STATUSES, "status")
+        source = _optional(source, MAX_SOURCE_CHARS, "source")
         links = [(_cr_id(x), "depends_on") for x in depends_on] + [(_cr_id(x), "references") for x in references]
         if any(other == cr_id for other, _ in links):
             raise ValueError(f"{cr_id} cannot depend on or reference itself")
         args = {"cr": cr_id, "status": status, "depends_on": list(depends_on), "references": list(references)}
         with self._store(who, "save_cr", args) as store:
-            store.save_cr(cr_id, title, summary, status, who.name)
+            store.save_cr(cr_id, title, summary, status, who.name, source)
             store.set_cr_links(cr_id, links)
         return {"cr": cr_id, "title": title, "status": status, "depends_on": [o for o, k in links if k == "depends_on"],
                 "references": [o for o, k in links if k == "references"]}
+
+    def propose_cr(self, who: Principal, cr_id: str, title: str, summary: str, depends_on: list[str] | tuple = (),
+                   references: list[str] | tuple = (), source: str | None = None) -> dict:
+        """Record a CR that exists in Jira, Confluence or a design document but not yet in Lineage, so its
+        requirements and dependencies become shared memory. Anyone may propose; it lands with status
+        `proposed` and an admin or maintainer confirms or edits it. The author may revise their own
+        proposal until it is confirmed; nobody can overwrite anyone else's CR."""
+        cr_id, title = _cr_id(cr_id), _text(title, MAX_TERM_CHARS, "title")
+        summary, source = _text(summary, MAX_TEXT_CHARS, "summary"), _optional(source, MAX_SOURCE_CHARS, "source")
+        deps = list(dict.fromkeys(_cr_id(x) for x in depends_on))
+        refs = list(dict.fromkeys(_cr_id(x) for x in references if _cr_id(x) not in deps))
+        # Safety net: CR ids the summary mentions are at least linked as references.
+        mentioned = [m.upper() for m in re.findall(self.settings.cr_pattern, summary, re.IGNORECASE)]
+        unlisted = [m for m in dict.fromkeys(mentioned) if m != cr_id and m not in deps and m not in refs]
+        refs += unlisted
+        if cr_id in deps + refs:
+            raise ValueError(f"{cr_id} cannot depend on or reference itself")
+        links = [(d, "depends_on") for d in deps] + [(r, "references") for r in refs]
+        with self._store(who, "propose_cr", {"cr": cr_id, "depends_on": deps, "references": refs, "source": source}) as store:
+            existing = store.get_cr(cr_id)
+            if existing is not None and not (existing["status"] == "proposed" and existing["created_by"] == who.name):
+                raise ValueError(f"{cr_id} is already registered by {existing['created_by']}; read it with get_cr")
+            store.save_cr(cr_id, title, summary, "proposed", who.name, source)
+            store.set_cr_links(cr_id, links)
+        note = ("Recorded as a proposal; an admin or maintainer confirms it. Call get_cr now for the context of "
+                "everything it builds on.")
+        if unlisted:
+            note += (f" The summary mentions {', '.join(unlisted)}, recorded only as reference(s). If {cr_id} is built "
+                     f"on top of {'it' if len(unlisted) == 1 else 'them'}, call propose_cr again with depends_on.")
+        return {"cr": cr_id, "status": "proposed", "revised": existing is not None, "depends_on": deps,
+                "references": refs, "note": note}
 
     def list_crs(self, who: Principal, status: str | None = None) -> list[dict]:
         status = _choice(status, CR_STATUSES, "status") if status else None

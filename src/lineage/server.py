@@ -31,7 +31,8 @@ INSTRUCTIONS = (
     "another system (the backend, an upstream or downstream service), use search_code then read_code "
     "instead of workspace search, and never conclude something is unavailable without searching here. "
     "Whenever a task or the developer mentions a change request id (e.g. CR-3002), call get_cr before "
-    "anything else: it includes the CRs it builds on, their contracts, decisions and code."
+    "anything else: it includes the CRs it builds on, their contracts, decisions and code. Requirements "
+    "come from the CR's design document or ticket; if the CR is not in Lineage yet, record it with propose_cr."
 )
 
 
@@ -163,6 +164,23 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
         system, and/or `name` (e.g. "REST POST /orders", "event order.placed"). history=true returns every
         version. Use it whenever code must call, consume or configure another system."""
         return await run(ctx, lambda who, project: app.contracts(who, cr, provider, name, history))
+
+    @mcp.tool()
+    async def propose_cr(ctx: Context, cr: str, title: str, summary: str, depends_on: list[str] | None = None,
+                         references: list[str] | None = None, source: str | None = None) -> dict:
+        """Record a change request Lineage does not know yet, from its design document or ticket (given by
+        the developer, or read from Jira/Confluence), so the team keeps its history.
+        - summary: the requirements themselves, in a few lines. Other developers will NOT have the document,
+          so never write "see the document".
+        - depends_on: EVERY CR id the document says this one builds on, extends, reuses or sits on top of.
+          This is what lets later work inherit those CRs' contracts, decisions and code.
+        - references: CR ids it only mentions for context.
+        - source: where others can read the original: Jira key (e.g. SHOP-5002) or page URL. A local file
+          name only if nothing else exists.
+        Stored as a proposal an admin or maintainer confirms. You may call it again to correct your own
+        proposal until it is confirmed. Afterwards call get_cr for everything it builds on."""
+        return await run(ctx, lambda who, project: app.propose_cr(who, cr, title, summary, depends_on or [],
+                                                                  references or [], source))
 
     @mcp.tool()
     async def list_crs(ctx: Context, status: str | None = None) -> list[dict]:

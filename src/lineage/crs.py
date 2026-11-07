@@ -16,6 +16,8 @@ MAX_FILES_PER_SYSTEM = 20
 MAX_COMMITS_PER_SYSTEM = 10
 
 GUIDE = (
+    "Requirements come from the CR's design document or ticket (given by the developer, or read from "
+    "Jira/Confluence); this context adds what the code base already knows about it. "
     "builds_on lists every CR this one is built on (nearest first) with its agreed contracts, approved "
     "decisions and the code each system wrote for it. Build on those, do not re-derive them. Use "
     "read_code on implemented_in paths to see that code. Implement agreed contracts exactly: optional "
@@ -105,7 +107,7 @@ def build_context(store: Store, cr_id: str, project: str | None = None) -> dict:
         return {
             "cr": cid, "registered": c is not None,
             "title": c["title"] if c else None, "status": c["status"] if c else None,
-            "summary": c["summary"] if c else None,
+            "summary": c["summary"] if c else None, "source": c["source"] if c else None,
             "contracts": latest_contracts(by_cr(contracts, cid), include_proposed=full),
             "decisions": [_decision(d) for d in by_cr(decisions, cid) if full or d["status"] == "approved"],
             "implemented_in": implemented_in(by_cr(mentions, cid)),
@@ -164,7 +166,12 @@ def _warnings(cr_id: str, cr: dict | None, this: dict, builds_on: list[dict], co
               drift: list[dict]) -> list[str]:
     out = []
     if cr is None:
-        out.append(f"{cr_id} is not registered in Lineage; only its code and commit mentions are known.")
+        out.append(f"{cr_id} is not registered in Lineage; only its code and commit mentions are known. Take its "
+                   "requirements from the design document the developer provided, or from Jira/Confluence if those "
+                   "tools are available. Then record it with propose_cr: a summary of the requirements, every CR id "
+                   "the document says it builds on in depends_on, and the Jira key or page URL as source, so the "
+                   "team keeps its history. Call get_cr again for "
+                   "the context of what it builds on.")
     for c in this["contracts"]:
         if c["status"] == "proposed":
             out.append(f"{cr_id}'s contract '{c['provider']} {c['name']}' is still proposed, not agreed: not final.")

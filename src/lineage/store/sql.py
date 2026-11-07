@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from lineage.models import Chunk, ParsedFile
 from lineage.store.base import ChunkRow, Scope, TermMapping
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 FIRST_SHARED_VERSION = 3  # older schemas only ever existed in local pre-release POCs
 
 # Shared databases hold people's rules and dictionaries, so schema changes are migrations, never
@@ -32,6 +32,8 @@ MIGRATIONS: dict[int, list[str]] = {
     4: ["alter table systems add column description text"],
     # Change-request tables are new tables, which COMMON_DDL creates on every start.
     5: [],
+    # Where a CR's requirements live (Jira key, Confluence page, design document).
+    6: ["alter table crs add column source text"],
 }
 
 # {id} = auto-increment primary key, {ref} = integer foreign key type, per dialect.
@@ -99,7 +101,7 @@ create unique index if not exists jobs_one_active on jobs(system_id) where statu
 create table if not exists crs(
     id text primary key, title text not null, summary text,
     status text not null check(status in ('proposed', 'in_progress', 'implemented', 'cancelled')),
-    created_by text not null, created_at text not null, updated_at text not null);
+    created_by text not null, created_at text not null, updated_at text not null, source text);
 -- depends_on: built on top of the other CR. references: related context.
 create table if not exists cr_links(
     cr_id text not null references crs(id) on delete cascade, other_id text not null,
@@ -511,12 +513,15 @@ class SqlStore:
 
     # ----- change requests
 
-    def save_cr(self, cr_id: str, title: str, summary: str | None, status: str, user: str) -> None:
+    def save_cr(self, cr_id: str, title: str, summary: str | None, status: str, user: str,
+                source: str | None = None) -> None:
         self._execute(
-            "insert into crs(id, title, summary, status, created_by, created_at, updated_at) values (?,?,?,?,?,?,?)"
+            "insert into crs(id, title, summary, status, created_by, created_at, updated_at, source)"
+            " values (?,?,?,?,?,?,?,?)"
             " on conflict(id) do update set title = excluded.title, summary = excluded.summary,"
-            " status = excluded.status, updated_at = excluded.updated_at",
-            (cr_id, title, summary, status, user, now(), now()))
+            " status = excluded.status, updated_at = excluded.updated_at,"
+            " source = coalesce(excluded.source, crs.source)",
+            (cr_id, title, summary, status, user, now(), now(), source))
 
     def set_cr_links(self, cr_id: str, links: Sequence[tuple[str, str]]) -> None:
         with self._tx():

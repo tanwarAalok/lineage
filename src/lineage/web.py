@@ -96,7 +96,7 @@ def register_web(mcp: MCPServer, app: Lineage) -> None:
     route("/api/crs", "GET", lambda who, p, b: app.list_crs(who))
     route("/api/crs", "POST", lambda who, p, b: app.save_cr(
         who, _s(b, "id"), _s(b, "title"), b.get("summary"), b.get("status") or "proposed",
-        _list(b.get("depends_on")), _list(b.get("references"))))
+        _list(b.get("depends_on")), _list(b.get("references")), b.get("source")))
     route("/api/crs/{cr}", "GET", lambda who, p, b: app.cr_context(who, p["cr"]))
     route("/api/crs/{cr}/contracts", "POST", lambda who, p, b: app.propose_contract(
         who, p["cr"], _s(b, "provider"), _s(b, "name"), _s(b, "spec"), b.get("consumers"), b.get("source"),

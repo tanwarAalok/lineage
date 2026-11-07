@@ -135,6 +135,36 @@ def test_warns_when_code_predates_the_current_contract(crs):
     assert '"x": 1' in mine[0]["contract_now_says"] and "billing/invoice.py" in mine[0]["your_files"]
 
 
+def test_developer_records_a_cr_from_its_design_document(crs):
+    app, bob = crs.app, crs.who("bob")
+    unknown = app.cr_context(bob, "CR-7")
+    assert any("propose_cr" in w and "design document" in w for w in unknown["warnings"])
+
+    r = app.propose_cr(bob, "CR-7", "Gift receipts", "Print a receipt without prices for gift orders.",
+                       depends_on=["CR-1"], source="JIRA SHOP-7 / Confluence: Gift receipts HLD v2")
+    assert r["status"] == "proposed" and r["depends_on"] == ["CR-1"]
+    ctx = app.cr_context(bob, "CR-7")
+    assert ctx["source"] == "JIRA SHOP-7 / Confluence: Gift receipts HLD v2" and ctx["created_by"] == "bob"
+    assert ctx["builds_on"][0]["cr"] == "CR-1" and ctx["builds_on"][0]["contracts"]  # inherits CR-1 at once
+
+    with pytest.raises(ValueError, match="already registered"):  # never overwrites someone else's CR
+        app.propose_cr(bob, "CR-1", "Hijack", "x")
+    assert app.cr_context(bob, "CR-1")["title"] == "Gift wrap"
+    with pytest.raises(ValueError, match="already registered"):
+        app.propose_cr(crs.who("carol"), "CR-7", "Hijack", "x")
+
+    # A CR id named in the summary but left out is still linked, and the agent is told to fix it.
+    r = app.propose_cr(bob, "CR-7", "Gift receipts", "Builds on CR-2: receipts show the delivery date.")
+    assert r["revised"] and r["references"] == ["CR-2"] and "depends_on" in r["note"]
+    r = app.propose_cr(bob, "CR-7", "Gift receipts", "Builds on CR-2: receipts show the delivery date.",
+                       depends_on=["CR-2"], source="JIRA SHOP-7 / Confluence: Gift receipts HLD v2")
+    assert r["depends_on"] == ["CR-2"] and r["references"] == [] and "mentions" not in r["note"]
+    ctx = app.cr_context(bob, "CR-7")
+    assert [a["cr"] for a in ctx["builds_on"]] == ["CR-2", "CR-1"]
+    app.save_cr(crs.root, "CR-7", "Gift receipts", ctx["summary"], "in_progress", depends_on=["CR-1"])
+    assert app.cr_context(bob, "CR-7")["source"].startswith("JIRA SHOP-7")  # confirming keeps the source
+
+
 def test_unregistered_crs_and_cycles_are_safe(crs):
     app, root = crs.app, crs.root
     write(crs.billing, "billing/legacy.py", "# CR-77 hotfix from 2019\nRATE = 3\n")

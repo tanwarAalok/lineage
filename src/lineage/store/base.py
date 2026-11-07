@@ -121,7 +121,9 @@ class Store(Protocol):
         """Jobs whose server stopped heartbeating before `older_than` (ISO time) can never finish."""
 
     # --- change requests (org-wide: a CR spans systems)
-    def save_cr(self, cr_id: str, title: str, summary: str | None, status: str, user: str) -> None: ...
+    def save_cr(self, cr_id: str, title: str, summary: str | None, status: str, user: str,
+                source: str | None = None) -> None:
+        """Upsert. `source`: where the requirements live (Jira key, Confluence page, document)."""
     def set_cr_links(self, cr_id: str, links: Sequence[tuple[str, str]]) -> None:
         """Replace the CR's outgoing links: (other_cr_id, 'depends_on' | 'references')."""
     def get_cr(self, cr_id: str) -> dict | None: ...
