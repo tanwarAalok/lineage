@@ -110,7 +110,7 @@ sequenceDiagram
     Dev->>Agent: "Implement CR-3002" + design document<br/>(or: "requirements are in SHOP-3002")
     opt requirements live in Jira / Confluence
         Agent->>Docs: fetch ticket SHOP-3002 and its linked HLD page
-        Docs-->>Agent: requirements; "builds on CR-3001"
+        Docs-->>Agent: requirements, plus "builds on CR-3001"
     end
     Agent->>L: get_project_context()
     L-->>Agent: rules, dictionary, what this repo is, the other systems
@@ -125,7 +125,7 @@ sequenceDiagram
     end
     Agent->>L: search_code / read_code across systems
     L-->>Agent: the relevant files and their source lines
-    Agent->>Dev: code that follows the document AND matches what<br/>other systems agreed; open questions flagged
+    Agent->>Dev: code that follows the document AND matches what<br/>other systems agreed, with open questions flagged
 ```
 
 The document says **what** to build; Lineage supplies **what already exists around it**. When a
