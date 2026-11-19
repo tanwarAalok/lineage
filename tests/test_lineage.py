@@ -182,3 +182,39 @@ def test_search_eval_scores_rankings():
                        (("invoice", "billing/invoice.py"), ("cart", "web/cart.js"), ("nothing", "y.py"))])
     assert (report["top1"], report["top3"], report["mrr"]) == (0.333, 0.667, 0.5)
     assert [m["query"] for m in report["misses"]] == ["nothing"]
+
+
+def test_parses_commonjs_style_javascript():
+    """Found by indexing express: methods assigned to objects had no symbols, and the license
+    banner became every file's summary."""
+    from lineage.ingest.parse import parse
+    js = b"""/*!
+ * shop
+ * Copyright(c) 2024 Someone
+ * MIT Licensed
+ */
+var req = exports = module.exports = {};
+
+/**
+ * Return the client IP behind trusted proxies.
+ */
+
+defineGetter(req, 'ip', function ip() {
+  return this.socket.remoteAddress;
+});
+
+/**
+ * Send a JSON response.
+ */
+res.json = function json(obj) {
+  return this.send(JSON.stringify(obj));
+};
+
+Cart.prototype.total = function () { return 0; };
+"""
+    f = parse("lib/request.js", js)
+    by_name = {s.name: s for s in f.symbols}
+    assert {"ip", "res.json", "Cart.prototype.total"} <= set(by_name)
+    assert by_name["ip"].summary == "Return the client IP behind trusted proxies."  # blank line before code is fine
+    assert by_name["res.json"].summary == "Send a JSON response."
+    assert "Copyright" not in f.summary and "shop" != f.summary

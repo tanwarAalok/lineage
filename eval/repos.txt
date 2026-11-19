@@ -1,0 +1,5 @@
+# project  url  ref (tag or commit; pinned so scores only move when Lineage changes)
+requests   https://github.com/psf/requests.git                 v2.32.3
+gin        https://github.com/gin-gonic/gin.git                v1.10.0
+express    https://github.com/expressjs/express.git            4.21.2
+petclinic  https://github.com/spring-projects/spring-petclinic.git 500158f732419217507c7656904b8e6aa1bcc0d6

@@ -301,6 +301,12 @@ tuning): the right file is in the top 10 for **88%** of requirements and in the 
 Given a three-requirement CR with Saleor reachable only through Lineage, Copilot named every
 correct file using `search_code` and `read_code` alone.
 
+**Search, reproducible in CI** ([`eval/`](eval)): 45 ticket-style queries over four pinned
+open-source repos in four languages (requests, gin, express, spring-petclinic, ~580 files):
+right file in the top 10 for **98%**, top 3 for 89%, first for 64%, MRR 0.78. Every push runs
+`eval/run.sh` and fails if top-10 drops below 0.93 or MRR below 0.72. Run it yourself:
+`eval/run.sh /tmp/lineage-eval`.
+
 **Scale**, on a generated 22,000-file repo (8-core laptop, Postgres + pgvector): first index 90 s
 (storage and parsing; embedding with the default model adds time on CPU, about 14 minutes for
 Saleor's 4,644 files), re-index with nothing changed 7 s, search 60–100 ms.

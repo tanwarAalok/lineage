@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
 
     ev = sub.add_parser("eval", help="measure search quality on labelled queries (YAML list of {query, expect, project?})")
     ev.add_argument("cases")
+    ev.add_argument("--min-top10", type=float, help="exit 1 if the top-10 hit rate is below this (CI gate)")
+    ev.add_argument("--min-mrr", type=float, help="exit 1 if MRR is below this (CI gate)")
 
     sub.add_parser("projects", help="list indexed projects")
 
@@ -94,6 +96,12 @@ def main(argv: list[str] | None = None) -> int:
             with open(args.cases, encoding="utf-8") as f:
                 cases = yaml.safe_load(f) or []
             result = evaluate(lambda q, proj: app.search_code(me, q, 10, proj or "*"), cases)
+            failed = [f"{k} {result[k]} < {floor}" for k, floor in (("top10", args.min_top10), ("mrr", args.min_mrr))
+                      if floor is not None and result[k] < floor]
+            if failed:
+                print(json.dumps(result, indent=2))
+                print("search quality below the floor: " + ", ".join(failed), file=sys.stderr)
+                return 1
         elif args.cmd == "projects":
             result = app.list_projects(me)
         elif args.cmd == "db":

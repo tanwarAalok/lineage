@@ -1,0 +1,56 @@
+# Requirement-style queries with the file(s) a developer would change. Written from the code at
+# the refs in repos.txt, worded like tickets: business language, few or no exact identifiers.
+# Each case searches its own project: several repos legitimately answer generic asks like "redirect".
+
+# --- requests (Python)
+- {project: requests, query: "reuse connections and retry when the network fails", expect: [src/requests/adapters.py]}
+- {project: requests, query: "username and password login using basic or digest scheme", expect: [src/requests/auth.py]}
+- {project: requests, query: "keep cookies and default settings between several calls to the same site", expect: [src/requests/sessions.py]}
+- {project: requests, query: "drop credentials when a redirect goes to a different host", expect: [src/requests/sessions.py]}
+- {project: requests, query: "header names should be looked up without caring about upper or lower case", expect: [src/requests/structures.py]}
+- {project: requests, query: "throw an error when the server answers with a client or server failure code", expect: [src/requests/models.py]}
+- {project: requests, query: "pick up proxy configuration from environment variables", expect: [src/requests/utils.py]}
+- {project: requests, query: "one-line helpers to send get post put delete without creating a session", expect: [src/requests/api.py]}
+- {project: requests, query: "error raised when the server takes too long to respond", expect: [src/requests/exceptions.py]}
+- {project: requests, query: "look up numeric HTTP status by a readable name like not_found", expect: [src/requests/status_codes.py]}
+- {project: requests, query: "callbacks that run after a response arrives", expect: [src/requests/hooks.py]}
+- {project: requests, query: "cookie storage that also behaves like a dictionary", expect: [src/requests/cookies.py]}
+
+# --- gin (Go)
+- {project: gin, query: "catch crashes in a handler and answer with internal server error", expect: [recovery.go]}
+- {project: gin, query: "print one line per request with duration status and client ip", expect: [logger.go]}
+- {project: gin, query: "protect routes with a username password prompt", expect: [auth.go]}
+- {project: gin, query: "fast route lookup supporting path parameters and wildcards", expect: [tree.go]}
+- {project: gin, query: "put routes under a shared prefix with common middleware", expect: [routergroup.go]}
+- {project: gin, query: "decode the JSON body of a request into a struct and validate it", expect: [binding/json.go, context.go, binding/binding.go, binding/default_validator.go]}
+- {project: gin, query: "fill struct fields from submitted form values", expect: [binding/form.go, binding/form_mapping.go]}
+- {project: gin, query: "render server side html pages from templates", expect: [render/html.go]}
+- {project: gin, query: "send the client to another url", expect: [render/redirect.go]}
+- {project: gin, query: "normalise request paths with double slashes or dot segments", expect: [path.go]}
+- {project: gin, query: "switch between debug release and test behaviour", expect: [mode.go]}
+- {project: gin, query: "serve files from a folder on disk", expect: [fs.go, routergroup.go]}
+- {project: gin, query: "read a query string value with a fallback default", expect: [context.go]}
+
+# --- express (JavaScript)
+- {project: express, query: "dispatch an incoming url through the middleware stack to the matching handler", expect: [lib/router/index.js, lib/router/layer.js]}
+- {project: express, query: "reply with json and the right content type", expect: [lib/response.js]}
+- {project: express, query: "store a cookie in the browser from the server", expect: [lib/response.js]}
+- {project: express, query: "find out which content types the client is willing to accept", expect: [lib/request.js]}
+- {project: express, query: "client ip address when running behind a trusted proxy", expect: [lib/request.js]}
+- {project: express, query: "render a view template with a configured engine", expect: [lib/view.js, lib/application.js]}
+- {project: express, query: "turn the query string into an object", expect: [lib/middleware/query.js]}
+- {project: express, query: "application wide settings that can be enabled or disabled", expect: [lib/application.js]}
+- {project: express, query: "register handlers for several http methods on one path", expect: [lib/router/route.js]}
+- {project: express, query: "send the browser to a different location", expect: [lib/response.js]}
+- {project: express, query: "generate entity tags so clients can cache responses", expect: [lib/utils.js]}
+
+# --- spring-petclinic (Java)
+- {project: petclinic, query: "search pet owners by surname and page through results", expect: [src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java, src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java]}
+- {project: petclinic, query: "a pet needs a name a type and a birth date before it is saved", expect: [src/main/java/org/springframework/samples/petclinic/owner/PetValidator.java]}
+- {project: petclinic, query: "book a new appointment for an animal", expect: [src/main/java/org/springframework/samples/petclinic/owner/VisitController.java]}
+- {project: petclinic, query: "show veterinarians and what they specialise in", expect: [src/main/java/org/springframework/samples/petclinic/vet/VetController.java, src/main/java/org/springframework/samples/petclinic/vet/Vet.java]}
+- {project: petclinic, query: "convert the animal kind chosen in a form into the stored type", expect: [src/main/java/org/springframework/samples/petclinic/owner/PetTypeFormatter.java]}
+- {project: petclinic, query: "cache the list of vets", expect: [src/main/java/org/springframework/samples/petclinic/system/CacheConfiguration.java]}
+- {project: petclinic, query: "deliberately trigger an error to demo the error page", expect: [src/main/java/org/springframework/samples/petclinic/system/CrashController.java]}
+- {project: petclinic, query: "register a new animal for an existing customer", expect: [src/main/java/org/springframework/samples/petclinic/owner/PetController.java]}
+- {project: petclinic, query: "let users switch the interface language", expect: [src/main/java/org/springframework/samples/petclinic/system/WebConfiguration.java]}

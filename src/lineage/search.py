@@ -35,8 +35,11 @@ def _rank_chunks(store: Store, embedder: Embedder, query: str, systems: Scope,
     return sorted(fused.items(), key=lambda kv: -kv[1]), rows
 
 
-TEST_MARKERS = ("/tests/", "/test/", "/__tests__/", "/spec/")
+TEST_MARKERS = ("/tests/", "/test/", "/__tests__/", "/spec/", "/testdata/", "/fixtures/")
 DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
+# Demo apps reuse the library's vocabulary and outrank it (express: top-10 89% -> see eval/). Not
+# "/samples/": Java packages like org/springframework/samples/ hold real code.
+EXAMPLE_MARKERS = ("/examples/", "/example/", "/demo/", "/demos/")
 
 
 def path_prior(path: str) -> float:
@@ -49,7 +52,7 @@ def path_prior(path: str) -> float:
     if any(m in p for m in TEST_MARKERS) or name.startswith("test_") or name.endswith(
             ("_test.py", "_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.js", "test.java", "tests.java")):
         return 0.5
-    if name.endswith(DOC_SUFFIXES) or "/docs/" in p:
+    if name.endswith(DOC_SUFFIXES) or "/docs/" in p or any(m in p for m in EXAMPLE_MARKERS):
         return 0.6
     return 1.0
 

@@ -236,7 +236,52 @@ def _structure(text: str, lines: list[str], lang: str) -> tuple[list[Symbol], st
 
     for item in result.structure or []:
         visit(item, None)
+    if lang in JS_LANGS:
+        _js_assigned_functions(text, lines, lang, symbols)
     return symbols, file_doc
+
+
+JS_LANGS = frozenset({"javascript", "typescript", "tsx"})
+JS_FUNCTIONS = frozenset({"function_expression", "function", "arrow_function", "generator_function"})
+
+
+def _js_assigned_functions(text: str, lines: list[str], lang: str, symbols: list[Symbol]) -> None:
+    """CommonJS/prototype style that the structure pass misses: `res.cookie = function (...) {}`,
+    `Foo.prototype.bar = function`, `defineGetter(req, 'ip', function ip() {})`. Without this, a
+    500-line express lib/request.js had one symbol and its methods were unsearchable by name.
+    ponytail: parses JS files a second time; fold into the call pass if indexing time matters."""
+    try:
+        root = tslp.get_parser(lang).parse(text.encode("utf-8")).root_node
+    except Exception:
+        return
+    taken = {s.start_line for s in symbols}
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type != "expression_statement":
+            stack.extend(node.named_children)
+            continue
+        expr = node.named_children[0] if node.named_children else None
+        name, fn = None, None
+        while expr is not None and expr.type == "assignment_expression":  # a.b = a.c = function ...
+            left, expr = expr.child_by_field_name("left"), expr.child_by_field_name("right")
+            name = left.text.decode("utf-8", "replace") if left is not None else name
+        if expr is not None and expr.type in JS_FUNCTIONS and name:
+            fn = expr
+        elif expr is not None and expr.type == "call_expression":  # defineGetter(obj, 'ip', function ip() {})
+            args = expr.child_by_field_name("arguments")
+            fn = next((a for a in (args.named_children if args else []) if a.type in JS_FUNCTIONS), None)
+            named = fn.child_by_field_name("name") if fn is not None else None
+            name = named.text.decode("utf-8", "replace") if named is not None else None
+        start = node.start_point[0]
+        if fn is None or not name or start + 1 in taken:
+            stack.extend(node.named_children)
+            continue
+        params = fn.child_by_field_name("parameters")
+        sig = f"{name} = function{params.text.decode('utf-8', 'replace') if params is not None else '()'}"
+        symbols.append(Symbol(name=name, kind="function", start_line=start + 1, end_line=node.end_point[0] + 1,
+                              signature=sig[:300], summary=_comment_above(lines, start) or sig[:160]))
+        taken.add(start + 1)
 
 
 # Node types that mean "a call" across grammars (python, js/ts, go, rust, c/c++, java, c#, kotlin, php, ...).
@@ -347,6 +392,7 @@ def _windows(first: int, last: int, lines: list[str]) -> list[tuple[int, int]]:
 
 
 COMMENT_PREFIXES = ("//", "/*", "*", "# ", "--", ";;")
+LICENSE_BANNER = re.compile(r"(?i)\bcopyright\b|\blicen[cs]ed?\b|SPDX-License-Identifier")
 SKIP_ABOVE = ("@", "[")  # annotations / attributes between a doc comment and its symbol
 
 
@@ -366,9 +412,13 @@ def _comment_above(lines: list[str], start: int, top_of_file: bool = False) -> s
             if not _is_comment(line):
                 break
             block.append(line)
+        if LICENSE_BANNER.search("\n".join(block)):  # "express / Copyright(c) ..." says nothing about the file
+            return ""
     else:
-        i = start - 1
-        while i >= 0 and lines[i].strip().startswith(SKIP_ABOVE):
+        i, blanks = start - 1, 0
+        # One blank line between a doc comment and its code is common (express, many JS codebases).
+        while i >= 0 and (lines[i].strip().startswith(SKIP_ABOVE) or (not lines[i].strip() and blanks < 1)):
+            blanks += not lines[i].strip()
             i -= 1
         while i >= 0 and _is_comment(lines[i].strip()):
             block.insert(0, lines[i].strip())

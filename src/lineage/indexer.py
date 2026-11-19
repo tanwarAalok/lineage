@@ -29,7 +29,7 @@ WINDOW = 512  # files in flight at once: bounds memory however big the repo is
 PARALLEL_FROM = 300  # below this many files, process start-up costs more than it saves
 PROGRESS_EVERY_S = 2.0
 BULK_LOAD_FILES = 2000  # this many new files lets the store defer index upkeep to one build
-INDEX_FORMAT = 3  # bump whenever parsing/chunking output changes: forces a full re-index once
+INDEX_FORMAT = 4  # bump whenever parsing/chunking output changes: forces a full re-index once
 
 Progress = Callable[[dict], None]
 
