@@ -214,6 +214,7 @@ export LINEAGE_ALLOWED_ROOTS=~/src                      # Windows: set LINEAGE_A
 lineage index ~/src/orders-service --project orders-service   # first run downloads the ~90 MB model
 lineage index ~/src/web-frontend   --project web-frontend
 lineage search "create order API request body"
+lineage eval search-cases.yaml   # top-1/3/10 and MRR on your own labelled queries: - {query: ..., expect: [path]}
 ```
 
 Then add `.vscode/mcp.json` to a repo:
@@ -272,11 +273,11 @@ Full details (managed Postgres providers, TLS, Docker, running several servers, 
 | Tool | What the agent gets |
 | --- | --- |
 | **Context** | |
-| `get_project_context(project?)` | This repo's approved rules and dictionary, what the system is, and the map of other systems. Agents call it first. |
-| `list_projects()` | Every system, your role, the latest indexing job. |
+| `get_project_context(project?)` | This repo's approved rules and dictionary, what the system is, and the map of other systems, plus how fresh the index is (commit, time, commits it hasn't seen yet). Agents call it first. |
+| `list_projects()` | Every system, your role, the commit it was indexed at, the latest indexing job. |
 | **Code** | |
 | `search_code(query, top_n?, project?)` | The most relevant files across **all** systems, each with its project, a one-line meaning, matching symbols and line range. `project` narrows. |
-| `read_code(path, project, start_line?, end_line?)` | Numbered lines from any system's indexed file, including repos not in the workspace. |
+| `read_code(path, project, start_line?, end_line?)` | Numbered lines from any system's indexed file, including repos not in the workspace. Flagged `stale` when the file changed after indexing. |
 | `resolve_term(term, project?)` | What a business or design term means and which code implements it. |
 | **Change requests** | |
 | `get_cr(cr)` | A CR with everything it builds on: agreed contracts, decisions, implementing code per system, and warnings (this repo's own first). Retired or cancelled CRs pass nothing on: the agent is pointed to the CR that superseded them. |

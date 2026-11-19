@@ -158,6 +158,27 @@ def git_cr_mentions(root: Path, pattern: str, max_commits: int = 5000) -> list[t
     return rows
 
 
+def git_head(root: Path) -> str | None:
+    """The commit the checkout is at, or None outside git."""
+    return _git(root, "rev-parse", "HEAD")
+
+
+def commits_since(root: Path, sha: str) -> int | None:
+    """Commits on HEAD after `sha` (None if unknown, e.g. history rewritten or not git)."""
+    out = _git(root, "rev-list", "--count", f"{sha}..HEAD")
+    return int(out) if out and out.isdigit() else None
+
+
+def _git(root: Path, *args: str) -> str | None:
+    if not (root / ".git").exists():
+        return None
+    try:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=True,
+                              timeout=30).stdout.decode().strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 PLAIN_TEXT_EXTENSIONS = (".txt", ".log", ".csv")  # the pack maps .txt to vimdoc
 
 

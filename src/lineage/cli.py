@@ -1,4 +1,4 @@
-"""`lineage index|search|resolve|projects|user|maintainer|serve`.
+"""`lineage index|search|eval|resolve|projects|user|maintainer|serve`.
 
 The CLI talks to the DB file directly, so it runs as the local admin: use it to bootstrap the
 first admin, then manage everything else from the web UI. Logs go to stderr; stdout stays clean
@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("resolve", help="map a design term to code")
     r.add_argument("term")
     r.add_argument("--project")
+
+    ev = sub.add_parser("eval", help="measure search quality on labelled queries (YAML list of {query, expect, project?})")
+    ev.add_argument("cases")
 
     sub.add_parser("projects", help="list indexed projects")
 
@@ -85,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
             result = app.search_code(me, args.query, args.top_n, args.project)
         elif args.cmd == "resolve":
             result = app.resolve_term(me, args.term, args.project)
+        elif args.cmd == "eval":
+            import yaml
+            from lineage.search import evaluate
+            with open(args.cases, encoding="utf-8") as f:
+                cases = yaml.safe_load(f) or []
+            result = evaluate(lambda q, proj: app.search_code(me, q, 10, proj or "*"), cases)
         elif args.cmd == "projects":
             result = app.list_projects(me)
         elif args.cmd == "db":

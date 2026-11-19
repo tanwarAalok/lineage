@@ -22,6 +22,12 @@ def test_normal_files_kept(path):
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
     'password = "correcthorsebattery"',
     "https://user:pa55word@example.com/repo",
+    "sk_live_" + "a1B2" * 6,
+    "npm_" + "A1b2" * 9,
+    "hf_" + "Ab" * 17,
+    "glpat-" + "x1Y2" * 5,
+    "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=" + "Ab9+" * 11 + "==",
+    'headers = {"Authorization": "Bearer abcdef0123456789abcdef0123"}',
 ])
 def test_tokens_redacted(secret):
     text, n = redact(f"x = 1\n{secret}\ny = 2")
@@ -37,5 +43,6 @@ def test_redaction_keeps_line_numbers():
 
 
 def test_ordinary_code_untouched():
-    code = 'token = get_token()\npassword = form["password"]\n'
+    code = ('token = get_token()\npassword = form["password"]\nnpm_config_registry_override_for_ci_builds = 1\n'
+            'headers = {"Authorization": f"Bearer {token}"}\n')
     assert redact(code) == (code, 0)

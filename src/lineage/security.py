@@ -24,6 +24,10 @@ SECRET_PATTERNS = [re.compile(p) for p in (
     r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b",                   # Slack
     r"\bsk-[A-Za-z0-9_-]{20,}\b",                          # OpenAI/Anthropic-style keys
     r"\bAIza[0-9A-Za-z_-]{35}\b",                          # Google API key
+    r"\b[rs]k_(?:live|test)_[0-9A-Za-z]{16,}\b",           # Stripe
+    r"\b(?:npm_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{34,}|glpat-[A-Za-z0-9_-]{20,})\b",  # npm, Hugging Face, GitLab
+    r"(?i)\bAccountKey=[A-Za-z0-9+/=]{40,}",               # Azure storage connection strings
+    r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*",            # hard-coded Authorization headers
     r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",  # JWT
     r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]{3,}@",  # credentials in URLs
     # key = "value" assignments for secret-ish names; keeps the name, redacts the value.

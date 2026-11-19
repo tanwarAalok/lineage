@@ -21,7 +21,7 @@ from lineage.auth import Principal, hash_token, new_token
 from lineage.config import Settings
 from lineage.indexer import Progress, index_repo
 from lineage.ingest.embed import Embedder, make_embedder
-from lineage.ingest.parse import decode, read_indexable
+from lineage.ingest.parse import commits_since, decode, file_hash, read_indexable
 from lineage.security import is_secret_file, redact, resolve_repo_path, validate_system_id
 from lineage.store.base import Store, TermMapping, open_store
 from lineage.store.sql import now
@@ -106,7 +106,8 @@ class Lineage:
             jobs = {}
             for j in store.jobs(None, limit=200):
                 jobs.setdefault(j["system_id"], j)
-        return [{"id": r["id"], "description": r["description"], "files": r["files"], "indexed_at": r["indexed_at"],
+            freshness = {r["id"]: _freshness(store, r["id"], r["indexed_at"]) for r in rows}
+        return [{"id": r["id"], "description": r["description"], "files": r["files"], **freshness[r["id"]],
                  "role": who.role(r["id"]), "last_job": _job_summary(jobs.get(r["id"]))} for r in rows]
 
     def set_description(self, who: Principal, project: str, description: str | None) -> dict:
@@ -223,9 +224,18 @@ class Lineage:
         project = self._readable(who, project)
         with self._store(who, "project_context", {"project": project}) as store:
             systems = store.systems(who.scope())
+            this = next((s for s in systems if s["id"] == project), None)
+            index = _freshness(store, project)
+            if this and index["indexed_commit"]:
+                behind = commits_since(Path(this["root"]), index["indexed_commit"])
+                index["commits_since_indexed"] = behind
+                if behind:
+                    index["warning"] = (f"The server's checkout of {project} has {behind} commit(s) the index has not "
+                                        "seen: search may miss or misplace recent code. Ask a maintainer to re-index.")
             return {
                 "project": project,
-                "description": next((s["description"] for s in systems if s["id"] == project), None),
+                "description": this["description"] if this else None,
+                "index": index,
                 "rules": [{"title": r["title"], "rule": r["body"]} for r in store.rules([project], "approved")],
                 "dictionary": [{"term": t["term"], "definition": t["definition"]}
                                for t in store.terms([project], status="approved")],
@@ -244,7 +254,8 @@ class Lineage:
         args = {"project": project, "path": path, "start_line": start_line, "end_line": end_line}
         with self._store(who, "read_code", args) as store:
             rows = store.systems([project])
-            if not rows or not store.is_indexed(project, path):
+            indexed = store.indexed_hash(project, path) if rows else None
+            if indexed is None:
                 raise LookupError(f"{path!r} is not an indexed file of {project!r}; use a path from search_code")
         root = Path(rows[0]["root"]).resolve()
         file = (root / path).resolve()
@@ -256,8 +267,13 @@ class Lineage:
         lines = redact(decode(data))[0].splitlines()
         start = max(1, start_line or 1)
         end = min(len(lines), end_line or start + MAX_READ_LINES - 1, start + MAX_READ_LINES - 1)
-        return {"project": project, "path": path, "start_line": start, "end_line": end, "total_lines": len(lines),
-                "code": "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, end + 1))}
+        out = {"project": project, "path": path, "start_line": start, "end_line": end, "total_lines": len(lines),
+               "code": "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, end + 1))}
+        if file_hash(data) != indexed:  # search came from the index, this read from the live checkout
+            out["stale"] = True
+            out["note"] = ("This file changed since it was indexed: line ranges and symbols from search_code may be "
+                           "off. This is the current code; trust it over the search hit.")
+        return out
 
     def assets(self, who: Principal, project: str) -> dict[str, str]:
         project = self._readable(who, project)
@@ -536,6 +552,13 @@ def _require_cr_editor(who: Principal) -> None:
     """Registering CRs and approving CR-wide decisions: admins, or maintainers of any project."""
     if not (who.is_admin or who.roles):
         raise PermissionError(f"{who.name} needs to be an admin or a maintainer to do this")
+
+
+def _freshness(store: Store, project: str, fallback_at: str | None = None) -> dict:
+    """When and at which commit the index last caught up with the project's checkout
+    (fallback_at: newest file write, for indexes built before runs were recorded)."""
+    return {"indexed_commit": store.get_meta(f"indexed_commit:{project}") or None,
+            "indexed_at": store.get_meta(f"indexed_run_at:{project}") or fallback_at}
 
 
 def _job_summary(job: dict | None) -> dict | None:

@@ -1,9 +1,11 @@
 import dataclasses
+import shutil
 import time
+from pathlib import Path
 
 import pytest
 
-from conftest import write
+from conftest import INVOICE, write
 from lineage.service import Lineage
 
 
@@ -141,3 +143,42 @@ def test_guards(env, tmp_path):
         app.search_code(root, "x" * 5000)
     with pytest.raises(RuntimeError, match="embedder"):
         Lineage(dataclasses.replace(env.settings, embedder="hash:256")).index_project(root, str(env.billing), "billing")
+
+
+def test_read_code_flags_a_file_changed_since_indexing(env):
+    bob, app = env.who("bob"), env.app
+    assert "stale" not in app.read_code(bob, "billing/invoice.py", "billing")
+    write(env.billing, "billing/invoice.py", INVOICE.replace("apply_tax(lines)", "apply_tax(lines, region)"))
+    code = app.read_code(bob, "billing/invoice.py", "billing")
+    assert code["stale"] and "apply_tax(lines, region)" in code["code"]  # the live code, labelled as newer
+
+
+def test_context_says_how_far_the_index_is_behind_git(env):
+    import subprocess
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    repo = Path(env.settings.allowed_roots[0]) / "shop"
+    write(repo, "shop/cart.py", "def cart_total(items):\n    return sum(items)\n")
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],  # noqa: E731
+                                    check=True, capture_output=True)
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-qm", "first")
+    env.app.index_project(env.root, str(repo), "shop")
+    index = env.app.project_context(env.who("bob"), "shop")["index"]
+    assert index["indexed_commit"] and index["commits_since_indexed"] == 0 and "warning" not in index
+    write(repo, "shop/cart.py", "def cart_total(items, tax):\n    return sum(items) * tax\n")
+    git("commit", "-qam", "tax")
+    index = env.app.project_context(env.who("bob"), "shop")["index"]
+    assert index["commits_since_indexed"] == 1 and "re-index" in index["warning"]
+    assert {p["id"]: p["indexed_commit"] for p in env.app.list_projects(env.root)}["shop"] == index["indexed_commit"]
+
+
+def test_search_eval_scores_rankings():
+    from lineage.search import evaluate
+    hits = {"invoice": ["a.py", "billing/invoice.py"], "cart": ["web/cart.js"], "nothing": ["x.py"]}
+    report = evaluate(lambda q, project: [{"path": p} for p in hits[q]],
+                      [{"query": q, "expect": [e]} for q, e in
+                       (("invoice", "billing/invoice.py"), ("cart", "web/cart.js"), ("nothing", "y.py"))])
+    assert (report["top1"], report["top3"], report["mrr"]) == (0.333, 0.667, 0.5)
+    assert [m["query"] for m in report["misses"]] == ["nothing"]

@@ -110,8 +110,11 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
         """Search the code of ALL the organisation's systems: this repository AND the backend services,
         BFFs, frontends and legacy systems that are NOT in this workspace. Use it instead of workspace
         search whenever the answer may live in another system (e.g. "the backend", an upstream API).
-        Returns the top files (max 25), each with its system_id, a one-line meaning, matching
-        symbols and line range; then read them with read_code. `project` narrows to one system."""
+        Write the query as the requirement in plain words PLUS the identifiers you expect in the code:
+        likely function/class names, API paths, event or config names, error messages (e.g. "limit gift
+        message length giftMessage max_length validate GiftWrap 400"). Identifiers find code far better
+        than prose alone. Returns the top files (max 25), each with its system_id, a one-line meaning,
+        matching symbols and line range; then read them with read_code. `project` narrows to one system."""
         return await run(ctx, lambda who, project: app.search_code(who, query, top_n, project),
                          project=project or ALL_PROJECTS)
 

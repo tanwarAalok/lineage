@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Callable
 
 from lineage.config import Settings
 from lineage.ingest.embed import Embedder
-from lineage.ingest.parse import file_hash, git_cr_mentions, parse, read_indexable, walk
+from lineage.ingest.parse import file_hash, git_cr_mentions, git_head, parse, read_indexable, walk
 from lineage.models import ParsedFile
 from lineage.store.base import Store
 
@@ -27,8 +28,8 @@ EMBED_BATCH = 256  # chunks per embedding call, across files
 WINDOW = 512  # files in flight at once: bounds memory however big the repo is
 PARALLEL_FROM = 300  # below this many files, process start-up costs more than it saves
 PROGRESS_EVERY_S = 2.0
-BULK_LOAD_FILES = 2000
-INDEX_FORMAT = 3  # bump whenever parsing/chunking output changes: forces a full re-index once  # this many new files lets the store defer index upkeep to one build
+BULK_LOAD_FILES = 2000  # this many new files lets the store defer index upkeep to one build
+INDEX_FORMAT = 3  # bump whenever parsing/chunking output changes: forces a full re-index once
 
 Progress = Callable[[dict], None]
 
@@ -135,6 +136,9 @@ def index_repo(root: Path, system_id: str, settings: Settings, embedder: Embedde
     # Commit messages naming a CR link it to the files that commit changed (history, not just code).
     store.replace_commit_mentions(system_id, git_cr_mentions(root, settings.cr_pattern))
     store.set_meta(format_key, str(INDEX_FORMAT))
+    # Freshness: which commit and when the index was last brought in line with the checkout.
+    store.set_meta(f"indexed_commit:{system_id}", git_head(root) or "")
+    store.set_meta(f"indexed_run_at:{system_id}", datetime.now(timezone.utc).isoformat(timespec="seconds"))
     report.deleted = len(gone)
     report.seconds = round(time.monotonic() - started, 2)
     tell("done", force=True)

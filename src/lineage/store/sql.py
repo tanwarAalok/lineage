@@ -246,8 +246,12 @@ class SqlStore:
                       " on conflict(id) do update set name = excluded.name, root = excluded.root",
                       (system_id, name, root))
 
+    def indexed_hash(self, system_id: str, path: str) -> str | None:
+        row = self._one("select hash from files where system_id = ? and path = ?", (system_id, path))
+        return row["hash"] if row else None
+
     def is_indexed(self, system_id: str, path: str) -> bool:
-        return self._one("select 1 as x from files where system_id = ? and path = ?", (system_id, path)) is not None
+        return self.indexed_hash(system_id, path) is not None
 
     def file_hashes(self, system_id: str) -> dict[str, str]:
         return {r["path"]: r["hash"] for r in self._all("select path, hash from files where system_id = ?", (system_id,))}

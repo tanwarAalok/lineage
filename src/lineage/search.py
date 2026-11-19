@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Callable
 
 from lineage.ingest.embed import Embedder
 from lineage.models import SearchHit
@@ -151,3 +152,21 @@ def resolve_term(store: Store, embedder: Embedder, term: str, systems: Scope) ->
 def _m(m: TermMapping) -> dict:
     return {"system_id": m.system_id, "symbol": m.symbol_name, "path": m.path,
             "status": m.status, "origin": m.origin, "score": m.score}
+
+
+def evaluate(search: Callable[[str, str | None], list[dict]], cases: list[dict]) -> dict:
+    """Search quality on labelled cases [{query, expect: [paths], project?}]: share of queries with
+    a right file in the top 1/3/10, and MRR. `search(query, project)` returns hits best-first.
+    Re-run it before and after any ranking change (embedder, fusion, priors): numbers, not hunches."""
+    ranks, misses = [], []
+    for case in cases:
+        expect = {p.replace("\\", "/").lstrip("/") for p in case["expect"]}
+        paths = [h["path"] for h in search(case["query"], case.get("project"))]
+        rank = next((i + 1 for i, p in enumerate(paths) if p in expect), None)
+        ranks.append(rank)
+        if rank is None or rank > 3:
+            misses.append({"query": case["query"], "rank": rank, "got": paths[:3]})
+    n = len(ranks) or 1
+    within = lambda k: round(sum(1 for r in ranks if r and r <= k) / n, 3)  # noqa: E731
+    return {"queries": len(ranks), "top1": within(1), "top3": within(3), "top10": within(10),
+            "mrr": round(sum(1 / r for r in ranks if r) / n, 3), "misses": misses}
