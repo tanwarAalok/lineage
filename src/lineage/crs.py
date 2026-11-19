@@ -23,16 +23,20 @@ GUIDE = (
     "read_code on implemented_in paths to see that code. Implement agreed contracts exactly: optional "
     "fields stay optional, limits and names as written. Contracts marked proposed are not final. "
     "Warnings name code that may lag a changed contract: check it, fix it if it is part of the task, "
-    "and tell the developer about the rest.")
+    "and tell the developer about the rest. A CR that is retired or cancelled is no longer in force: never "
+    "build on its contracts or decisions; follow superseded_by instead.")
 
 
-def ancestry(store: Store, cr_id: str) -> list[tuple[str, int]]:
-    """(cr_id, depth) for every CR `cr_id` depends on, transitively, nearest first; cycle-safe."""
+def ancestry(store: Store, cr_id: str, stop: dict | frozenset = frozenset()) -> list[tuple[str, int]]:
+    """(cr_id, depth) for every CR `cr_id` depends on, transitively, nearest first; cycle-safe.
+    CRs in `stop` (retired or cancelled) are listed but not walked through: their foundation is not ours."""
     found: list[tuple[str, int]] = []
     seen, frontier, depth = {cr_id}, [cr_id], 1
     while frontier and depth <= MAX_DEPTH:
         nxt = []
         for cid in frontier:
+            if cid in stop and cid != cr_id:
+                continue
             for link in store.cr_links(cid):
                 other = link["other_id"]
                 if link["cr_id"] == cid and link["kind"] == "depends_on" and other not in seen:
@@ -96,7 +100,8 @@ def build_context(store: Store, cr_id: str, project: str | None = None) -> dict:
     """`project` is the asking repository: drift that concerns it is listed first, with its files."""
     cr = store.get_cr(cr_id)
     links = store.cr_links(cr_id)
-    chain = ancestry(store, cr_id)
+    inactive = store.inactive_crs()
+    chain = ancestry(store, cr_id, inactive)
     refs = [l["other_id"] for l in links if l["cr_id"] == cr_id and l["kind"] == "references"]
     ids = [cr_id] + [a for a, _ in chain] + refs
     contracts, decisions, mentions = store.contracts(ids), store.decisions(ids), store.cr_mentions(ids)
@@ -104,13 +109,18 @@ def build_context(store: Store, cr_id: str, project: str | None = None) -> dict:
 
     def summary(cid: str, full: bool) -> dict:
         c = store.get_cr(cid)
-        return {
+        out = {
             "cr": cid, "registered": c is not None,
             "title": c["title"] if c else None, "status": c["status"] if c else None,
             "summary": c["summary"] if c else None, "source": c["source"] if c else None,
+            "retired": bool(c and c["retired_at"]), "superseded_by": c["superseded_by"] if c else None,
+        }
+        if cid != cr_id and cid in inactive:  # no longer in force: nothing of it may be built on
+            return out | {"contracts": [], "decisions": [], "implemented_in": {}}
+        return out | {
             "contracts": latest_contracts(by_cr(contracts, cid), include_proposed=full),
             "decisions": [_decision(d) for d in by_cr(decisions, cid) if full or d["status"] == "approved"],
-            "implemented_in": implemented_in(by_cr(mentions, cid)),
+            "implemented_in": _prune_removed(store, implemented_in(by_cr(mentions, cid))),
         }
 
     this = summary(cr_id, full=True) | ({"created_at": cr["created_at"], "created_by": cr["created_by"]} if cr else {})
@@ -129,12 +139,25 @@ def build_context(store: Store, cr_id: str, project: str | None = None) -> dict:
         "how_to_use": GUIDE,
         **this,
         "builds_on": builds_on,
-        "references": [{k: v for k, v in summary(r, full=False).items() if k in ("cr", "title", "status", "summary")}
+        "references": [{k: v for k, v in summary(r, full=False).items()
+                        if k in ("cr", "title", "status", "summary", "retired", "superseded_by")}
                        for r in refs],
         "built_on_by": [{"cr": l["cr_id"], "kind": l["kind"]} for l in links if l["other_id"] == cr_id],
         "contract_history": [_contract(r) for r in by_cr(contracts, cr_id)],
     }
     return context
+
+
+def _prune_removed(store: Store, impl: dict) -> dict:
+    """Files known only from commits that are no longer in the index move to `removed_files`: git
+    history keeps naming them, but the code is gone. ponytail: one lookup per commit-only file
+    (at most MAX_FILES_PER_SYSTEM per system); batch it if CR chains get long."""
+    for system, s in impl.items():
+        gone = [f["path"] for f in s["files"] if not f["lines"] and not store.is_indexed(system, f["path"])]
+        if gone:
+            s["files"] = [f for f in s["files"] if f["path"] not in gone]
+            s["removed_files"] = gone
+    return impl
 
 
 def _decision(d: dict) -> dict:
@@ -165,6 +188,13 @@ def _drift(this: dict, builds_on: list[dict]) -> list[dict]:
 def _warnings(cr_id: str, cr: dict | None, this: dict, builds_on: list[dict], contracts: list[dict],
               drift: list[dict]) -> list[str]:
     out = []
+    if cr is not None and cr["retired_at"]:
+        out.append(f"{cr_id} was retired on {cr['retired_at'][:10]}" + (
+            f" and superseded by {cr['superseded_by']}: for new work call get_cr('{cr['superseded_by']}')."
+            if cr["superseded_by"] else ": its contracts and code may no longer be in use.") +
+            " Do not build new work on it.")
+    elif cr is not None and cr["status"] == "cancelled":
+        out.append(f"{cr_id} was cancelled: it was never delivered. Do not build new work on it.")
     if cr is None:
         out.append(f"{cr_id} is not registered in Lineage; only its code and commit mentions are known. Take its "
                    "requirements from the design document the developer provided, or from Jira/Confluence if those "
@@ -181,14 +211,30 @@ def _warnings(cr_id: str, cr: dict | None, this: dict, builds_on: list[dict], co
     for a in builds_on:
         if not a["registered"]:
             out.append(f"{cr_id} depends on {a['cr']}, which is not registered in Lineage.")
+        elif a["retired"]:
+            then = (f"Build on {a['superseded_by']} instead" if a["superseded_by"]
+                    else "Ask the developer what replaced it")
+            out.append(f"{cr_id} depends on {a['cr']}, which is retired"
+                       + (f" (superseded by {a['superseded_by']})" if a["superseded_by"] else "")
+                       + f": its contracts and decisions are left out because they are no longer in force. {then}, "
+                       f"and tell the developer that {cr_id}'s dependencies need updating.")
+        elif a["status"] == "cancelled":
+            out.append(f"{cr_id} depends on {a['cr']}, which was cancelled and never delivered: do not build "
+                       "on it; ask the developer what to rely on instead.")
         elif a["status"] != "implemented":
             out.append(f"{cr_id} builds on {a['cr']} ({a['status']}): that foundation may still change.")
+    for s in [this] + builds_on:
+        impl = s["implemented_in"]
+        if (s["status"] == "implemented" and not s["retired"] and impl
+                and not any(v["files"] for v in impl.values()) and any(v.get("removed_files") for v in impl.values())):
+            out.append(f"{s['cr']} may be obsolete: none of the files its commits changed exist any more. Check "
+                       "the current code before relying on its contracts, and ask a maintainer to retire it if so.")
     for d in drift:
         out.append(f"{d['system']} {d['role']} '{d['provider']} {d['contract']}', which changed to v{d['version']} on "
                    f"{d['changed']}, but its code for {d['cr']} was last committed {d['last_commit']}: it may still "
                    f"follow an older version. Read that code; update it if it does.")
     if cr is not None:
-        foundation = {a["cr"] for a in builds_on}
+        foundation = {a["cr"] for a in builds_on if not a["retired"] and a["status"] != "cancelled"}
         for r in contracts:  # a foundation that moved after this CR started
             if r["cr_id"] in foundation and r["status"] == "agreed" and r["version"] > 1 and r["created_at"] > cr["created_at"]:
                 out.append(f"{r['cr_id']}'s contract '{r['provider']} {r['name']}' changed to v{r['version']} on "
@@ -200,13 +246,20 @@ def contracts_view(store: Store, cr_id: str | None, provider: str | None, name: 
                    history: bool) -> list[dict]:
     """Contracts filtered by CR/provider/name. With a CR, also the ones it inherits from the CRs it
     builds on (marked inherited, nearest first)."""
+    inactive = store.inactive_crs()
     ids = None
     if cr_id:
-        ids = [cr_id] + [a for a, _ in ancestry(store, cr_id)]
+        ids = [cr_id] + [a for a, _ in ancestry(store, cr_id, inactive) if a not in inactive]
     rows = store.contracts(ids, provider, name)
+    if not history:  # contracts of CRs no longer in force are history, not the current API
+        rows = [r for r in rows if r["cr_id"] == cr_id or r["cr_id"] not in inactive]
     order = {cid: i for i, cid in enumerate(ids or [])}
     items = [_contract(r) for r in rows] if history else latest_contracts(rows)
     for item in items:
         item["inherited"] = bool(cr_id) and item["cr"] != cr_id
+        if item["cr"] in inactive:
+            c = inactive[item["cr"]]
+            item["cr_no_longer_in_force"] = ("cancelled" if not c["retired_at"] else "retired" + (
+                f", superseded by {c['superseded_by']}" if c["superseded_by"] else ""))
     # Nearest CR first, then per contract in the order versions were written: that is the history.
     return sorted(items, key=lambda c: (order.get(c["cr"], 0), c["provider"], c["name"], c["created_at"], c["version"]))

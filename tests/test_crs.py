@@ -165,6 +165,61 @@ def test_developer_records_a_cr_from_its_design_document(crs):
     assert app.cr_context(bob, "CR-7")["source"].startswith("JIRA SHOP-7")  # confirming keeps the source
 
 
+def test_retired_crs_stop_shaping_new_work(crs):
+    app, root, bob = crs.app, crs.root, crs.who("bob")
+    app.save_cr(root, "CR-5", "Gift wrap v2", "Wrap priced per item.", "implemented")
+    app.propose_contract(root, "CR-5", "billing", "REST POST /invoices/v2", '{"wrap": {"perItem": true}}', approve=True)
+    with pytest.raises(PermissionError):
+        app.retire_cr(bob, "CR-1")
+    with pytest.raises(LookupError):
+        app.retire_cr(root, "CR-1", superseded_by="CR-404")
+    app.retire_cr(root, "CR-1", superseded_by="CR-5")
+
+    ctx = app.cr_context(bob, "CR-2")  # CR-2 still says it builds on CR-1
+    parent = ctx["builds_on"][0]
+    assert parent["retired"] and parent["superseded_by"] == "CR-5"
+    assert parent["contracts"] == [] and parent["decisions"] == []  # nothing outdated leaks into new work
+    assert any("retired" in w and "Build on CR-5" in w for w in ctx["warnings"])
+    assert not any("may still change" in w for w in ctx["warnings"])
+
+    assert [c["name"] for c in app.contracts(bob, provider="billing")] == ["REST POST /invoices/v2"]
+    assert app.contracts(bob, cr_id="CR-2") == []
+    history = app.contracts(bob, provider="billing", history=True)
+    assert any(c["cr"] == "CR-1" and c["cr_no_longer_in_force"] == "retired, superseded by CR-5" for c in history)
+    own = app.cr_context(bob, "CR-1")  # its own page keeps the full record
+    assert own["retired"] and own["warnings"][0].startswith("CR-1 was retired") and own["contracts"]
+    assert next(c for c in app.list_crs(bob) if c["cr"] == "CR-1")["superseded_by"] == "CR-5"
+
+    app.retire_cr(root, "CR-1", retired=False)  # restored: back in force
+    assert app.cr_context(bob, "CR-2")["builds_on"][0]["contracts"]
+
+    app.save_cr(root, "CR-6", "Abandoned idea", status="cancelled")
+    app.save_cr(root, "CR-8", "Built on it", depends_on=["CR-6"])
+    assert any("cancelled and never delivered" in w for w in app.cr_context(root, "CR-8")["warnings"])
+
+
+def test_flags_a_cr_whose_code_is_gone(crs):
+    app, root = crs.app, crs.root
+    git(crs.crm, "init", "-q")
+    git(crs.crm, "add", ".")
+    git(crs.crm, "commit", "-q", "-m", "baseline")
+    write(crs.crm, "crm/gift_prefs.py", "def remember_gift_choice(customer):\n    return True\n")
+    git(crs.crm, "add", ".")
+    git(crs.crm, "commit", "-q", "-m", "CR-1: remember gift-wrap preference")
+    app.index_project(root, str(crs.crm), "crm")
+    app.save_cr(root, "CR-1", "Gift wrap", status="implemented")
+    assert not any("obsolete" in w for w in app.cr_context(root, "CR-1")["warnings"])
+
+    git(crs.crm, "rm", "-q", "crm/gift_prefs.py")
+    git(crs.crm, "commit", "-q", "-m", "drop gift preferences")
+    app.index_project(root, str(crs.crm), "crm")
+    ctx = app.cr_context(root, "CR-1")
+    assert ctx["implemented_in"]["crm"]["removed_files"] == ["crm/gift_prefs.py"]
+    assert not ctx["implemented_in"]["crm"]["files"]
+    assert any("CR-1 may be obsolete" in w for w in ctx["warnings"])
+    assert any("CR-1 may be obsolete" in w for w in app.cr_context(root, "CR-2")["warnings"])
+
+
 def test_unregistered_crs_and_cycles_are_safe(crs):
     app, root = crs.app, crs.root
     write(crs.billing, "billing/legacy.py", "# CR-77 hotfix from 2019\nRATE = 3\n")

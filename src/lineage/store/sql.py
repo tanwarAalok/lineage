@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from lineage.models import Chunk, ParsedFile
 from lineage.store.base import ChunkRow, Scope, TermMapping
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 FIRST_SHARED_VERSION = 3  # older schemas only ever existed in local pre-release POCs
 
 # Shared databases hold people's rules and dictionaries, so schema changes are migrations, never
@@ -34,6 +34,8 @@ MIGRATIONS: dict[int, list[str]] = {
     5: [],
     # Where a CR's requirements live (Jira key, Confluence page, design document).
     6: ["alter table crs add column source text"],
+    # A CR that was built but is no longer in force: retired, optionally superseded by another CR.
+    7: ["alter table crs add column retired_at text", "alter table crs add column superseded_by text"],
 }
 
 # {id} = auto-increment primary key, {ref} = integer foreign key type, per dialect.
@@ -101,7 +103,8 @@ create unique index if not exists jobs_one_active on jobs(system_id) where statu
 create table if not exists crs(
     id text primary key, title text not null, summary text,
     status text not null check(status in ('proposed', 'in_progress', 'implemented', 'cancelled')),
-    created_by text not null, created_at text not null, updated_at text not null, source text);
+    created_by text not null, created_at text not null, updated_at text not null, source text,
+    retired_at text, superseded_by text);
 -- depends_on: built on top of the other CR. references: related context.
 create table if not exists cr_links(
     cr_id text not null references crs(id) on delete cascade, other_id text not null,
@@ -536,6 +539,15 @@ class SqlStore:
     def crs(self, status: str | None = None) -> list[dict]:
         clause, params = (" where status = ?", [status]) if status else ("", [])
         return self._all(f"select * from crs{clause} order by created_at desc, id", params)
+
+    def retire_cr(self, cr_id: str, retired_at: str | None, superseded_by: str | None) -> None:
+        self._execute("update crs set retired_at = ?, superseded_by = ?, updated_at = ? where id = ?",
+                      (retired_at, superseded_by, now(), cr_id))
+
+    def inactive_crs(self) -> dict[str, dict]:
+        rows = self._all("select id, status, retired_at, superseded_by from crs"
+                         " where retired_at is not null or status = 'cancelled'")
+        return {r["id"]: r for r in rows}
 
     def cr_links(self, cr_id: str) -> list[dict]:
         """Outgoing links (what this CR builds on or references) and incoming ones (who builds on it)."""

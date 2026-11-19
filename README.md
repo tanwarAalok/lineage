@@ -279,7 +279,7 @@ Full details (managed Postgres providers, TLS, Docker, running several servers, 
 | `read_code(path, project, start_line?, end_line?)` | Numbered lines from any system's indexed file, including repos not in the workspace. |
 | `resolve_term(term, project?)` | What a business or design term means and which code implements it. |
 | **Change requests** | |
-| `get_cr(cr)` | A CR with everything it builds on: agreed contracts, decisions, implementing code per system, and warnings (this repo's own first). |
+| `get_cr(cr)` | A CR with everything it builds on: agreed contracts, decisions, implementing code per system, and warnings (this repo's own first). Retired or cancelled CRs pass nothing on: the agent is pointed to the CR that superseded them. |
 | `get_contract(cr?, provider?, name?, history?)` | Agreed REST, event and config contracts, including those inherited from parent CRs; `history` returns every version. |
 | `list_crs(status?)` | Registered CRs and what each depends on. |
 | **Contributions** (proposals for maintainers) | |
@@ -325,6 +325,7 @@ serving · every call audited. Details: [docs/security.md](docs/security.md).
 - [x] Two-level semantic search tuned on a real codebase
 - [ ] Invite links and optional SSO (OIDC)
 - [ ] `check_impact`: callers, callees and downstream systems affected by a change
+- [x] Outdated history stays out of new work: retire a CR (optionally superseded by another), and a CR whose code is gone is flagged as possibly obsolete
 - [ ] Schema-level drift detection (today: commit dates against contract changes)
 - [ ] Jira / Azure Boards import of CRs; HLD and Confluence ingestion
 

@@ -409,7 +409,7 @@ async function crsView() {
       h("p", { class: "muted" }, "Each CR records the contracts systems agree, the decisions made, and which CRs it builds on. Lineage links code and commits that mention a CR id automatically.")),
     h("div", { class: "panel table-wrap" }, crs.length
       ? h("table", {}, h("thead", {}, h("tr", {}, ["CR", "Title", "Status", "Builds on", "Updated"].map((c) => h("th", {}, c)))),
-          h("tbody", {}, crs.map((c) => h("tr", {}, h("td", {}, crLink(c.cr)), h("td", {}, c.title), h("td", {}, h("span", { class: "badge" }, c.status)),
+          h("tbody", {}, crs.map((c) => h("tr", {}, h("td", {}, crLink(c.cr)), h("td", {}, c.title), h("td", {}, h("span", { class: "badge" }, c.status), c.retired && [" ", badge("rejected"), " retired", c.superseded_by ? [" → ", crLink(c.superseded_by)] : ""]),
             h("td", {}, c.depends_on.length ? c.depends_on.flatMap((d, i) => [i ? ", " : "", crLink(d)]) : "-"), h("td", { class: "muted" }, when(c.updated_at))))))
       : h("div", { class: "empty" }, "No change requests yet.")),
     crEditor() && h("div", { class: "panel" }, h("h2", {}, "Register a change request"),
@@ -432,6 +432,7 @@ async function crView(id) {
     source: h("input", { type: "text", placeholder: "API review 2026-11-03" }) };
   const df = { q: h("input", { type: "text", required: true }), d: h("textarea", { required: true }),
     system: h("input", { type: "text", placeholder: "optional: the system it concerns" }) };
+  const retireBy = h("input", { type: "text", placeholder: "CR-4001" });
   const contract = (k) => h("div", { class: "panel stack" },
     h("div", { class: "row spread" },
       h("div", { class: "row" }, h("strong", {}, `${k.provider} · ${k.name}`), h("span", { class: "badge" }, `v${k.version}`), badge(k.status === "agreed" ? "approved" : k.status)),
@@ -442,14 +443,22 @@ async function crView(id) {
   const code = (impl) => Object.keys(impl).length
     ? Object.entries(impl).map(([sys, v]) => h("div", {}, h("strong", {}, sys), h("ul", {},
         v.files.map((f) => h("li", {}, h("code", {}, f.path), f.symbols.length ? ` (${f.symbols.join(", ")})` : "")),
-        v.commits.map((m) => h("li", { class: "muted" }, m)))))
+        v.commits.map((m) => h("li", { class: "muted" }, m)),
+        (v.removed_files || []).map((p) => h("li", { class: "muted" }, h("s", {}, p), " (no longer in the code)")))))
     : h("p", { class: "muted" }, "No code or commits mention this CR yet.");
   return h("div", { class: "stack" },
     h("div", {}, h("h1", {}, c.cr, c.title ? ` · ${c.title}` : ""),
-      h("p", {}, c.status ? h("span", { class: "badge" }, c.status) : badge("rejected"), " ", c.summary || "")),
+      h("p", {}, c.status ? h("span", { class: "badge" }, c.status) : badge("rejected"),
+        c.retired ? [" ", badge("rejected"), " retired", c.superseded_by ? [", superseded by ", crLink(c.superseded_by)] : ""] : "",
+        " ", c.summary || "")),
+    c.registered && crEditor() && (c.retired
+      ? h("div", {}, h("button", { class: "small", onclick: action(() => api(`/api/crs/${encodeURIComponent(c.cr)}/retire`, { retired: false }), "Restored") }, "Restore (back in force)"))
+      : h("form", { class: "inline", onsubmit: action(() => api(`/api/crs/${encodeURIComponent(c.cr)}/retire`, { superseded_by: retireBy.value }), "Retired") },
+          h("label", {}, "Superseded by (optional)", retireBy),
+          h("div", {}, h("button", { class: "small danger", type: "submit" }, "Retire: no longer in force")))),
     c.warnings.length > 0 && h("div", { class: "secret stack" }, c.warnings.map((w) => h("div", {}, "⚠ ", w))),
     c.builds_on.length > 0 && h("div", { class: "panel stack" }, h("h2", {}, "Builds on"),
-      c.builds_on.map((a) => h("div", {}, crLink(a.cr), ` ${a.title || "(not registered)"} · ${a.status || "?"} · ${a.contracts.length} contracts, ${a.decisions.length} decisions`))),
+      c.builds_on.map((a) => h("div", {}, crLink(a.cr), ` ${a.title || "(not registered)"} · ${a.status || "?"}${a.retired ? " · RETIRED" + (a.superseded_by ? ` → ${a.superseded_by}` : "") : ""} · ${a.contracts.length} contracts, ${a.decisions.length} decisions`))),
     c.built_on_by.length > 0 && h("p", { class: "muted" }, "Built on by: ", c.built_on_by.flatMap((b, i) => [i ? ", " : "", crLink(b.cr)])),
     h("h2", {}, "Contracts"),
     c.contract_history.length ? c.contract_history.slice().reverse().map(contract) : h("p", { class: "muted" }, "No contracts yet."),

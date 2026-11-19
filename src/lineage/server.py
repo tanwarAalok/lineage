@@ -152,7 +152,7 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
         event and config contracts it defines (with version history), decisions, and which code and
         commits in every system implement it. Also everything it BUILDS ON: the CRs it depends on,
         transitively, with their agreed contracts, decisions and code, plus warnings when that foundation
-        is unfinished or changed. Call this first whenever a task, branch or the developer mentions a CR
+        is unfinished, changed, retired or superseded. Call this first whenever a task, branch or the developer mentions a CR
         id, and before writing code for one."""
         return await run(ctx, lambda who, project: app.cr_context(who, cr, project))
 
@@ -162,7 +162,8 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
         """Agreed contracts between systems: REST request/response schemas, event payloads, config keys.
         Filter by `cr` (also returns the contracts it inherits from the CRs it builds on), `provider`
         system, and/or `name` (e.g. "REST POST /orders", "event order.placed"). history=true returns every
-        version. Use it whenever code must call, consume or configure another system."""
+        version. Contracts of retired or cancelled CRs are no longer in force and are left out unless
+        history=true. Use it whenever code must call, consume or configure another system."""
         return await run(ctx, lambda who, project: app.contracts(who, cr, provider, name, history))
 
     @mcp.tool()
@@ -185,7 +186,8 @@ def build_server(settings: Settings, http: bool = False) -> tuple[MCPServer, Lin
     @mcp.tool()
     async def list_crs(ctx: Context, status: str | None = None) -> list[dict]:
         """Registered change requests (newest first) with status and what each depends on. `status`:
-        proposed, in_progress, implemented or cancelled."""
+        proposed, in_progress, implemented or cancelled. `retired` CRs are no longer in force; follow
+        their `superseded_by`."""
         return await run(ctx, lambda who, project: app.list_crs(who, status))
 
     @mcp.tool()

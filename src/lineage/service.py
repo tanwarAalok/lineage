@@ -24,6 +24,7 @@ from lineage.ingest.embed import Embedder, make_embedder
 from lineage.ingest.parse import decode, read_indexable
 from lineage.security import is_secret_file, redact, resolve_repo_path, validate_system_id
 from lineage.store.base import Store, TermMapping, open_store
+from lineage.store.sql import now
 
 log = logging.getLogger(__name__)
 
@@ -381,11 +382,28 @@ class Lineage:
         return {"cr": cr_id, "status": "proposed", "revised": existing is not None, "depends_on": deps,
                 "references": refs, "note": note}
 
+    def retire_cr(self, who: Principal, cr_id: str, superseded_by: str | None = None, retired: bool = True) -> dict:
+        """A CR that was built but is no longer in force (its API removed, or replaced by another CR).
+        Its contracts and decisions stop flowing into new work; history keeps them. retired=False restores it."""
+        _require_cr_editor(who)
+        cr_id = _cr_id(cr_id)
+        superseded_by = _cr_id(superseded_by) if retired and superseded_by else None
+        if superseded_by == cr_id:
+            raise ValueError(f"{cr_id} cannot supersede itself")
+        with self._store(who, "retire_cr", {"cr": cr_id, "retired": retired, "superseded_by": superseded_by}) as store:
+            if store.get_cr(cr_id) is None:
+                raise LookupError(f"{cr_id} is not registered")
+            if superseded_by and store.get_cr(superseded_by) is None:
+                raise LookupError(f"{superseded_by} is not registered; register the replacement first")
+            store.retire_cr(cr_id, now() if retired else None, superseded_by)
+        return {"cr": cr_id, "retired": retired, "superseded_by": superseded_by}
+
     def list_crs(self, who: Principal, status: str | None = None) -> list[dict]:
         status = _choice(status, CR_STATUSES, "status") if status else None
         with self._store(who, "list_crs", {"status": status}) as store:
             rows = store.crs(status)
             return [{"cr": r["id"], "title": r["title"], "status": r["status"], "summary": r["summary"],
+                     "retired": bool(r["retired_at"]), "superseded_by": r["superseded_by"],
                      "depends_on": [l["other_id"] for l in store.cr_links(r["id"])
                                     if l["cr_id"] == r["id"] and l["kind"] == "depends_on"],
                      "updated_at": r["updated_at"]} for r in rows]

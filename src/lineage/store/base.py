@@ -128,6 +128,10 @@ class Store(Protocol):
         """Replace the CR's outgoing links: (other_cr_id, 'depends_on' | 'references')."""
     def get_cr(self, cr_id: str) -> dict | None: ...
     def crs(self, status: str | None = None) -> list[dict]: ...
+    def retire_cr(self, cr_id: str, retired_at: str | None, superseded_by: str | None) -> None:
+        """Mark a CR retired (no longer in force), or restore it with retired_at=None."""
+    def inactive_crs(self) -> dict[str, dict]:
+        """CRs no longer in force (retired or cancelled): {id: {status, retired_at, superseded_by}}."""
     def cr_links(self, cr_id: str) -> list[dict]:
         """Links where the CR is either side: {cr_id, other_id, kind}."""
     def add_contract(self, cr_id: str, provider: str, name: str, spec: str, consumers: str | None,

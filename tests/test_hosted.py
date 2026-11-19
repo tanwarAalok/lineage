@@ -37,6 +37,8 @@ def test_upgrade_migrates_and_keeps_team_data(env):
         store._execute("alter table jobs drop column owner")
         store._execute("alter table systems drop column description")
         store._execute("alter table crs drop column source")
+        store._execute("alter table crs drop column retired_at")
+        store._execute("alter table crs drop column superseded_by")
         store._set_meta("schema_version", "3")
     with _reopen(app) as store:
         assert store._meta("schema_version") == str(SCHEMA_VERSION)
